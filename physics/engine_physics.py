@@ -404,24 +404,20 @@ class EnginePhysics:
             raw_fuel_main = dm_air_main * target_fa * main_fuel_signal
             raw_fuel_idle = dm_air_idle * target_fa * idle_fuel_signal
             
-            # Fuel film model
+            # Simplified fuel injection - no fuel film in crankcase for 50cc engine
+            # Fuel film was causing over-rich transfer when crankcase air was depleted
             throttle_factor = self._throttle_flow_factor()
             wet_fraction = max(0.15, 0.50 - 0.30 * throttle_factor)
-            evap_rate = 1.5 + 4.0 * throttle_factor + 0.02 * max(0.0, self.T_cr - T_ATM)
             
+            # Add all fuel directly to crankcase (no film model for small engine)
+            dm_fuel_in = (raw_fuel_main + raw_fuel_idle) * (1.0 - wet_fraction)
+            
+            # Keep minimal film that doesn't evaporate aggressively
             film_added = (raw_fuel_main + raw_fuel_idle) * wet_fraction * dt
             self.fuel_film_cr += film_added
-            
-            # Limit evaporation when crankcase air is low to prevent over-rich mixtures
-            # during transfer to cylinder
-            cr_fa_ratio = self.m_fuel_cr / max(1e-9, self.m_air_cr)
-            target_fa = self._target_fuel_air_ratio()
-            evap_limit = 1.0 if cr_fa_ratio <= target_fa * 1.5 else 0.3
-            
-            evaporated = min(self.fuel_film_cr, self.fuel_film_cr * evap_rate * dt * evap_limit)
+            # Very slow evaporation to prevent sudden enrichment
+            evaporated = min(self.fuel_film_cr, self.fuel_film_cr * 0.2 * dt)
             self.fuel_film_cr -= evaporated
-            
-            dm_fuel_in = (raw_fuel_main + raw_fuel_idle) * (1.0 - wet_fraction)
             dm_fuel_in += evaporated / max(dt, 1e-6)
             
             # Add to crankcase
