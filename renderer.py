@@ -179,7 +179,15 @@ class EngineRenderer:
                 else:
                     standard_particles.append(particle)
                     
+        # Define safe rendering bounds (motor area only)
+        safe_left = RENDER.crank_x - 300
+        safe_right = RENDER.crank_x + 300
+        safe_top = self.cylinder_y - 100
+        safe_bottom = RENDER.crank_y + 150
         for particle in standard_particles:
+            # Skip particles outside safe bounds (prevents rendering artifacts)
+            if not (safe_left <= particle.x <= safe_right and safe_top <= particle.y <= safe_bottom):
+                continue
             color = (*particle.color, int(particle.life))
             pygame.draw.circle(particle_surface, color, (int(particle.x), int(particle.y)), int(particle.size))
             
@@ -188,6 +196,9 @@ class EngineRenderer:
         if additive_particles:
             additive_surface = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
             for particle in additive_particles:
+                # Skip particles outside safe bounds
+                if not (safe_left <= particle.x <= safe_right and safe_top <= particle.y <= safe_bottom):
+                    continue
                 color = (*particle.color, int(particle.life))
                 pygame.draw.circle(additive_surface, color, (int(particle.x), int(particle.y)), int(particle.size))
                 # Add dynamic glow to hot particles
@@ -221,25 +232,50 @@ class EngineRenderer:
         ]
         for index, text in enumerate(texts):
             screen.blit(self.font.render(text, True, (220, 220, 230)), (20, 20 + index * 22))
-        diag_rect = (900, 30, 350, 280)
+        # PV-Diagram Cylinder - med clipping och relativ koordinatberäkning
+        diag_x, diag_y = 900, 30
+        diag_w, diag_h = 350, 280
+        diag_rect = (diag_x, diag_y, diag_w, diag_h)
         pygame.draw.rect(screen, (30, 30, 40), diag_rect, border_radius=8)
         pygame.draw.rect(screen, (100, 100, 100), diag_rect, width=2, border_radius=8)
-        screen.blit(self.small_font.render("PV-Diagram Cylinder (cc vs Bar)", True, (200, 200, 200)), (910, 40))
+        screen.blit(self.small_font.render("PV-Diagram Cylinder (cc vs Bar)", True, (200, 200, 200)), (diag_x + 10, diag_y + 10))
         if len(pv_cyl_points) > 2:
             mapped = []
             for volume, pressure in pv_cyl_points:
-                px = 900 + ((volume - 15) / 130) * 350
-                py = 310 - (min(pressure, 80) / 80) * 280
+                # Normalisera volym (15-145 cc) och tryck (0-80 Bar) till 0-1
+                vol_norm = (volume - 15) / 130
+                press_norm = pressure / 80
+                # Tillåt viss överströmning utanför 0-1 men clampa för säkerhet
+                vol_clamped = max(-0.2, min(vol_norm, 1.2))
+                press_clamped = max(-0.2, min(press_norm, 1.2))
+                # Konvertera till pixlar (med marginal på 10px runt om)
+                px = diag_x + 10 + vol_clamped * (diag_w - 20)
+                py = (diag_y + diag_h - 10) - press_clamped * (diag_h - 20)
                 mapped.append((px, py))
-            pygame.draw.lines(screen, (255, 120, 120), False, mapped, 2)
-        diag2_rect = (900, 350, 350, 280)
+            if len(mapped) > 1:
+                pygame.draw.lines(screen, (255, 120, 120), False, mapped, 2)
+        # PV-Diagram Vevhus - med clipping och bättre skalning
+        diag2_x, diag2_y = 900, 350
+        diag2_w, diag2_h = 350, 280
+        diag2_rect = (diag2_x, diag2_y, diag2_w, diag2_h)
         pygame.draw.rect(screen, (30, 40, 30), diag2_rect, border_radius=8)
         pygame.draw.rect(screen, (100, 100, 100), diag2_rect, width=2, border_radius=8)
-        screen.blit(self.small_font.render("PV-Diagram Vevhus (cc vs Bar)", True, (200, 200, 200)), (910, 360))
+        screen.blit(self.small_font.render("PV-Diagram Vevhus (cc vs Bar)", True, (200, 200, 200)), (diag2_x + 10, diag2_y + 10))
         if len(pv_cr_points) > 2:
             mapped2 = []
+            # Bättre tryckskala: 0.5 till 2.0 Bar (mer realistiskt för vevhus)
+            p_min, p_max = 0.5, 2.0
+            p_range = p_max - p_min
             for volume, pressure in pv_cr_points:
-                px = 900 + ((volume - 240) / 120) * 350
-                py = 630 - ((pressure - 0.5) / 1.0) * 280
+                # Normalisera volym (240-360 cc) och tryck (0.5-2.0 Bar) till 0-1
+                vol_norm = (volume - 240) / 120
+                press_norm = (pressure - p_min) / p_range
+                # Konvertera till pixlar (med marginal på 10px runt om)
+                # Tillåt viss överströmning utanför 0-1 men clampa för säkerhet
+                vol_clamped = max(-0.2, min(vol_norm, 1.2))
+                press_clamped = max(-0.5, min(press_norm, 1.5))
+                px = diag2_x + 10 + vol_clamped * (diag2_w - 20)
+                py = (diag2_y + diag2_h - 10) - press_clamped * (diag2_h - 20)
                 mapped2.append((px, py))
-            pygame.draw.lines(screen, (120, 255, 120), False, mapped2, 2)
+            if len(mapped2) > 1:
+                pygame.draw.lines(screen, (120, 255, 120), False, mapped2, 2)

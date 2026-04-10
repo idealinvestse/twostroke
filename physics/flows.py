@@ -26,6 +26,37 @@ from physics.constants import (
 )
 from physics.thermodynamics import Thermodynamics
 from physics.utils import clamp, gaussian_falloff
+from enum import Enum
+
+
+class ScavengingModel(Enum):
+    """Scavenging model types for 2-stroke engines.
+
+    - PERFECT_DISPLACEMENT: No mixing, fresh charge completely displaces residuals
+    - PERFECT_MIXING: Fresh charge mixes instantly with cylinder contents
+    - COMBINED: Realistic model with partial mixing and short-circuiting
+    """
+    PERFECT_DISPLACEMENT = "perfect_displacement"
+    PERFECT_MIXING = "perfect_mixing"
+    COMBINED = "combined"
+
+
+@dataclass
+class ScavengingState:
+    """State of scavenging process in cylinder."""
+    # Charge composition
+    fresh_charge_mass: float       # Fresh air+fuel in cylinder (kg)
+    residual_mass: float           # Burned residual gas (kg)
+    total_mass: float              # Total cylinder mass (kg)
+
+    # Efficiency metrics
+    charge_purity: float           # Fraction of fresh charge (0-1)
+    scavenging_efficiency: float   # Fraction of residuals displaced (0-1)
+    trapping_efficiency: float     # Fraction of fresh charge retained (0-1)
+    short_circuit_loss: float      # Fresh charge lost directly to exhaust (kg)
+
+    # Delivery ratio
+    delivery_ratio: float          # Delivered fresh charge / displacement volume fill
 
 
 @dataclass
@@ -342,3 +373,244 @@ class FlowCalculator:
         )
         
         return dm_air_main, dm_air_idle
+
+
+class ScavengingCalculator:
+    """Calculate scavenging efficiency and charge composition.
+
+    Implements multiple scavenging models for 2-stroke engines:
+    - Perfect displacement: Fresh charge pushes residuals out without mixing
+    - Perfect mixing: Instantaneous mixing of fresh charge with cylinder contents
+    - Combined: Realistic model with displacement and mixing phases
+    """
+
+    def __init__(
+        self,
+        model: ScavengingModel = ScavengingModel.COMBINED,
+        short_circuit_fraction: float = 0.15,
+        displacement_efficiency: float = 0.7,
+    ) -> None:
+        """
+        Args:
+            model: Scavenging model type
+            short_circuit_fraction: Fraction of transfer flow lost directly to exhaust (0-1)
+            displacement_efficiency: Effectiveness of displacement phase (0-1)
+        """
+        self.model = model
+        self.short_circuit_fraction = clamp(short_circuit_fraction, 0.0, 1.0)
+        self.displacement_efficiency = clamp(displacement_efficiency, 0.0, 1.0)
+
+    def calculate_scavenging(
+        self,
+        m_fresh_delivered: float,  # Fresh charge delivered via transfer (kg)
+        m_residual_initial: float,  # Initial residual mass in cylinder (kg)
+        m_fresh_initial: float = 0.0,  # Initial fresh charge in cylinder (kg)
+        displacement_ratio: float | None = None,  # m_delivered / m_cylinder_contents
+    ) -> ScavengingState:
+        """Calculate scavenging state based on model.
+
+        Args:
+            m_fresh_delivered: Mass of fresh charge delivered via transfer ports (kg)
+            m_residual_initial: Initial residual burned gas mass in cylinder (kg)
+            m_fresh_initial: Initial fresh charge mass in cylinder (kg)
+            displacement_ratio: Delivered mass / total cylinder mass (optional)
+
+        Returns:
+            ScavengingState with composition and efficiency metrics
+        """
+        m_total_initial = m_fresh_initial + m_residual_initial
+
+        if displacement_ratio is None:
+            displacement_ratio = m_fresh_delivered / max(m_total_initial, 1e-9)
+
+        if self.model == ScavengingModel.PERFECT_DISPLACEMENT:
+            return self._perfect_displacement(
+                m_fresh_delivered, m_residual_initial, m_fresh_initial, displacement_ratio
+            )
+        elif self.model == ScavengingModel.PERFECT_MIXING:
+            return self._perfect_mixing(
+                m_fresh_delivered, m_residual_initial, m_fresh_initial, displacement_ratio
+            )
+        else:  # COMBINED
+            return self._combined_model(
+                m_fresh_delivered, m_residual_initial, m_fresh_initial, displacement_ratio
+            )
+
+    def _perfect_displacement(
+        self,
+        m_fresh_delivered: float,
+        m_residual_initial: float,
+        m_fresh_initial: float,
+        lambda_scav: float,  # Delivery ratio
+    ) -> ScavengingState:
+        """Perfect displacement scavenging model.
+
+        Fresh charge completely displaces residuals without mixing.
+        Ideal case with no short-circuiting losses.
+        """
+        # In perfect displacement, fresh charge pushes out residuals
+        # until either fresh charge is depleted or cylinder is full of fresh charge
+        m_residual_final = max(0.0, m_residual_initial - m_fresh_delivered)
+        m_fresh_final = m_fresh_initial + m_fresh_delivered
+
+        # Total mass (may exceed initial if we don't account for exhaust outflow)
+        # Assume cylinder volume limits total mass via pressure equilibration
+        m_total_final = m_fresh_final + m_residual_final
+
+        # Scavenging efficiency = fraction of residuals displaced
+        scav_eff = 1.0 - (m_residual_final / max(m_residual_initial, 1e-9))
+
+        # Trapping efficiency = 1.0 (no short-circuiting in perfect displacement)
+        trap_eff = 1.0
+
+        # Short circuit loss = 0
+        short_circuit = 0.0
+
+        return ScavengingState(
+            fresh_charge_mass=m_fresh_final,
+            residual_mass=m_residual_final,
+            total_mass=m_total_final,
+            charge_purity=m_fresh_final / max(m_total_final, 1e-9),
+            scavenging_efficiency=scav_eff,
+            trapping_efficiency=trap_eff,
+            short_circuit_loss=short_circuit,
+            delivery_ratio=lambda_scav,
+        )
+
+    def _perfect_mixing(
+        self,
+        m_fresh_delivered: float,
+        m_residual_initial: float,
+        m_fresh_initial: float,
+        lambda_scav: float,
+    ) -> ScavengingState:
+        """Perfect mixing scavenging model.
+
+        Fresh charge mixes instantaneously and uniformly with cylinder contents.
+        Residuals are expelled proportionally to their concentration.
+        """
+        m_total_initial = m_fresh_initial + m_residual_initial
+
+        # With perfect mixing and expulsion, final purity follows:
+        # Purity = 1 - exp(-delivery_ratio) for initially pure residuals
+        # More generally: purity_final = purity_initial + (1 - purity_initial) * (1 - exp(-lambda_scav))
+        # But we need to account for mass balance
+
+        # Simplified approach: Assume some mass must leave to make room
+        # If delivery ratio < 1: total mass stays ~constant, mix replaces some exhaust
+        # If delivery ratio > 1: excess fresh charge also expelled
+
+        # For perfect mixing, final purity = (fresh_initial + fresh_delivered) / (total + excess expelled)
+        # But the actual expelled gas has the mixture composition
+
+        # Use mixing chamber approach:
+        # m_residual_final = m_residual_initial * exp(-lambda_scav)
+        m_residual_final = m_residual_initial * math.exp(-lambda_scav)
+
+        # Fresh charge remaining = all delivered minus what was expelled with mixture
+        # Fraction of fresh in mixture at end = 1 - (residuals/total)
+        m_total_final = m_total_initial  # Assume constant volume/pressure
+
+        # Fresh mass balance: initial + delivered - expelled*fresh_fraction
+        # This requires iterative solution; use approximation:
+        m_fresh_final = m_fresh_initial + m_fresh_delivered * math.exp(-lambda_scav)
+
+        # Short-circuit loss = delivered - retained
+        m_retained = m_fresh_final - m_fresh_initial
+        short_circuit = max(0.0, m_fresh_delivered - m_retained)
+
+        scav_eff = 1.0 - (m_residual_final / max(m_residual_initial, 1e-9))
+        trap_eff = m_retained / max(m_fresh_delivered, 1e-9)
+
+        return ScavengingState(
+            fresh_charge_mass=m_fresh_final,
+            residual_mass=m_residual_final,
+            total_mass=m_total_final,
+            charge_purity=m_fresh_final / max(m_total_final, 1e-9),
+            scavenging_efficiency=scav_eff,
+            trapping_efficiency=trap_eff,
+            short_circuit_loss=short_circuit,
+            delivery_ratio=lambda_scav,
+        )
+
+    def _combined_model(
+        self,
+        m_fresh_delivered: float,
+        m_residual_initial: float,
+        m_fresh_initial: float,
+        lambda_scav: float,
+    ) -> ScavengingState:
+        """Combined scavenging model with displacement and mixing phases.
+
+        More realistic model accounting for:
+        - Initial displacement phase (fresh charge pushes residuals)
+        - Short-circuiting (some fresh charge escapes directly)
+        - Mixing phase (at higher delivery ratios)
+        """
+        m_total_initial = m_fresh_initial + m_residual_initial
+
+        # Short-circuit loss: some fresh charge goes directly to exhaust
+        short_circuit = m_fresh_delivered * self.short_circuit_fraction
+        m_fresh_effective = m_fresh_delivered - short_circuit
+
+        # Displacement phase
+        # Effective fresh charge displaces residuals
+        m_residual_displaced = m_fresh_effective * self.displacement_efficiency
+        m_residual_after_disp = max(0.0, m_residual_initial - m_residual_displaced)
+
+        # Remaining effective fresh charge mixes with cylinder contents
+        m_fresh_for_mixing = m_fresh_effective - m_residual_displaced
+
+        if m_fresh_for_mixing > 0 and m_residual_after_disp > 0:
+            # Mixing with remaining residuals
+            mixing_ratio = m_fresh_for_mixing / max(m_total_initial, 1e-9)
+            m_residual_final = m_residual_after_disp * math.exp(-mixing_ratio)
+        else:
+            m_residual_final = m_residual_after_disp
+
+        # Fresh charge balance
+        m_fresh_final = m_fresh_initial + m_fresh_effective - m_residual_displaced
+        m_fresh_final = max(m_fresh_final, 0.0)
+
+        m_total_final = m_fresh_final + m_residual_final
+
+        scav_eff = 1.0 - (m_residual_final / max(m_residual_initial, 1e-9))
+        trap_eff = (m_fresh_final - m_fresh_initial) / max(m_fresh_delivered, 1e-9)
+
+        return ScavengingState(
+            fresh_charge_mass=m_fresh_final,
+            residual_mass=m_residual_final,
+            total_mass=m_total_final,
+            charge_purity=m_fresh_final / max(m_total_final, 1e-9),
+            scavenging_efficiency=scav_eff,
+            trapping_efficiency=clamp(trap_eff, 0.0, 1.0),
+            short_circuit_loss=short_circuit,
+            delivery_ratio=lambda_scav,
+        )
+
+    def calculate_charge_efficiency(
+        self,
+        m_fresh_in_cylinder: float,
+        m_displacement_volume_fill: float,
+        rho_atm: float,
+    ) -> dict[str, float]:
+        """Calculate charge-related efficiency metrics.
+
+        Args:
+            m_fresh_in_cylinder: Mass of fresh charge retained in cylinder (kg)
+            m_displacement_volume_fill: Mass to fill displacement volume at atm (kg)
+            rho_atm: Atmospheric density (kg/m³)
+
+        Returns:
+            Dictionary with efficiency metrics
+        """
+        # Volumetric efficiency: actual fresh charge / ideal fill
+        vol_eff = m_fresh_in_cylinder / max(m_displacement_volume_fill, 1e-9)
+
+        # Charge efficiency: ratio of fresh charge to total trapped mass
+        # This would need total trapped mass as input
+
+        return {
+            "volumetric_efficiency": vol_eff,
+            "relative_charge_efficiency": vol_eff,  # Same as VE for fresh charge
+        }

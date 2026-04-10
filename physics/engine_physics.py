@@ -290,7 +290,10 @@ class EnginePhysics:
             self.theta_ign = combustion.theta_ign
             self.lambda_value = combustion.lambda_value
             
-            if not combustion.active:
+            # IMPORTANT: Set combustion_active = True when combustion starts!
+            if combustion.active:
+                self.combustion_active = True
+            else:
                 self.combustion_active = False
                 self.lambda_value = clamp(combustion.lambda_value, 0.5, 2.5)
         else:

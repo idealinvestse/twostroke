@@ -6,6 +6,9 @@ for a realistic 2-stroke engine model.
 
 from physics.engine_physics import EnginePhysics, EngineSnapshot
 from physics.thermodynamics import Thermodynamics
+from physics.kinematics import SliderCrankKinematics, KinematicState
+from physics.flows import FlowCalculator, ScavengingCalculator, ScavengingModel, ScavengingState
+from physics.friction import FrictionModel, FrictionBreakdown, LubricationRegime
 from physics.constants import (
     MAX_CYLINDER_PRESSURE,
     MIN_PRESSURE,
@@ -51,6 +54,15 @@ mass_flow = Thermodynamics.mass_flow
 __all__ = [
     "EnginePhysics",
     "EngineSnapshot",
+    "SliderCrankKinematics",
+    "KinematicState",
+    "FlowCalculator",
+    "ScavengingCalculator",
+    "ScavengingModel",
+    "ScavengingState",
+    "FrictionModel",
+    "FrictionBreakdown",
+    "LubricationRegime",
     "flow_function",
     "mass_flow",
     "MAX_CYLINDER_PRESSURE",

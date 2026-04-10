@@ -129,10 +129,10 @@ class CombustionModel:
         actual_fuel_air_ratio = m_fuel_cyl / max(1e-9, m_air_cyl)
         lambda_value = (1.0 / max(1e-9, actual_fuel_air_ratio)) / STOICH_AFR
         
-        # Misfire check - much more forgiving for 50cc engine
-        # Allow very rich mixtures (down to lambda 0.01) and tiny fuel amounts
+        # Misfire check - for 50cc engine, only check if we have any fuel at all
+        # Lambda can be very rich due to fuel transfer dynamics
         available_fuel = min(m_fuel_cyl, m_air_cyl / STOICH_AFR)
-        if available_fuel <= 1e-12 or lambda_value > 2.5 or lambda_value < 0.01:
+        if available_fuel <= 1e-14:
             return CombustionState(
                 active=False,
                 burn_fraction=0.0,

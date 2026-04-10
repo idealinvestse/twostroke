@@ -113,3 +113,23 @@ EXHAUST_PORT_OPEN_M = EXHAUST_PORT_OPEN_MM / 1000
 TRANSFER_PORT_OPEN_M = TRANSFER_PORT_OPEN_MM / 1000
 EXHAUST_PORT_WIDTH_M = EXHAUST_PORT_WIDTH_MM / 1000
 TRANSFER_PORT_WIDTH_M = TRANSFER_PORT_WIDTH_MM / 1000
+
+# Friction model constants
+# Oil properties (SAE 10W-40 at operating temp)
+MU_OIL_BOUNDARY = 0.5        # Pa·s, effective viscosity in boundary regime
+MU_OIL_HYDRODYNAMIC = 0.01   # Pa·s, viscosity in hydrodynamic regime
+
+# Piston ring properties
+PISTON_RING_TENSION = 8.0    # N per ring (typical for 40mm bore)
+PISTON_NUM_RINGS = 2         # Number of rings (typical for 2-stroke)
+
+# Piston skirt
+PISTON_SKIRT_AREA = 0.0015   # m², contact area (typical for 40mm bore)
+
+# Bearings
+CRANK_BEARING_DIAMETER = 0.020  # m (20mm main bearing)
+CRANK_BEARING_WIDTH = 0.015     # m (15mm width)
+
+# Oil film thickness
+OIL_FILM_THICKNESS_MIN = 0.000001    # 1 micron minimum
+OIL_FILM_THICKNESS_HYDRO = 0.00001   # 10 micron hydrodynamic
