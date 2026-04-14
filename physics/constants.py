@@ -50,13 +50,17 @@ REED_STIFFNESS = 1200.0  # N/m equivalent
 REED_DAMPING = 40.0      # N·s/m equivalent
 REED_PRESSURE_COEF = 0.02  # m³/Pa effective area
 
-# Exhaust pipe constants
+# Exhaust pipe constants (legacy - kept for backwards compatibility)
+# New quasi-1D model in gasdynamics.py supersedes these
 PIPE_RESONANCE_FREQ_HZ = 140.0  # Hz, tuned for ~8400 RPM
 PIPE_Q_FACTOR = 2.5
 PIPE_AMPLITUDE_DECAY = 15.0  # 1/s, decay when exhaust closed
 PIPE_MAX_SUCTION_PA = 60000.0   # Max 0.6 bar below atm
 PIPE_MAX_PRESSURE_PA = 40000.0  # Max 0.4 bar above atm
 MAX_PIPE_AMPLITUDE = 80000.0    # Max amplitude (Pa) — ~0.8 bar peak, physical limit
+
+# Backwards compatibility aliases for old pipe model
+# Note: These are now superseded by ExpansionChamberPipe class
 
 # Fuel film constants
 CRANKCASE_WET_FRACTION_BASE = 0.50
@@ -98,6 +102,55 @@ TRANSFER_PORT_WIDTH_MM = 32.0    # w_tr (wider for better fuel transfer)
 
 # Maximum intake area
 MAX_INTAKE_AREA_M2 = 0.0012     # m², A_in_max
+
+# === Pipe Geometry for Quasi-1D Gasdynamics ===
+# Expansion Chamber (tuned for ~8400 RPM resonance)
+# Typical 50cc expansion chamber dimensions
+EXHAUST_HEADER_LENGTH_MM = 120.0      # mm, straight section from port
+EXHAUST_HEADER_DIAMETER_MM = 28.0       # mm, matches exhaust port
+
+EXHAUST_DIFFUSER_LENGTH_MM = 180.0    # mm, divergent cone
+EXHAUST_DIFFUSER_START_DIA_MM = 28.0  # mm
+EXHAUST_DIFFUSER_END_DIA_MM = 55.0    # mm
+
+EXHAUST_BELLY_LENGTH_MM = 150.0       # mm, parallel section
+EXHAUST_BELLY_DIAMETER_MM = 55.0      # mm
+
+EXHAUST_BAFFLE_LENGTH_MM = 140.0      # mm, convergent cone
+EXHAUST_BAFFLE_START_DIA_MM = 55.0    # mm
+EXHAUST_BAFFLE_END_DIA_MM = 22.0      # mm, stinger outlet
+
+# Convert to meters
+EXHAUST_HEADER_LENGTH_M = EXHAUST_HEADER_LENGTH_MM / 1000
+EXHAUST_HEADER_DIAMETER_M = EXHAUST_HEADER_DIAMETER_MM / 1000
+EXHAUST_DIFFUSER_LENGTH_M = EXHAUST_DIFFUSER_LENGTH_MM / 1000
+EXHAUST_DIFFUSER_START_DIA_M = EXHAUST_DIFFUSER_START_DIA_MM / 1000
+EXHAUST_DIFFUSER_END_DIA_M = EXHAUST_DIFFUSER_END_DIA_MM / 1000
+EXHAUST_BELLY_LENGTH_M = EXHAUST_BELLY_LENGTH_MM / 1000
+EXHAUST_BELLY_DIAMETER_M = EXHAUST_BELLY_DIAMETER_MM / 1000
+EXHAUST_BAFFLE_LENGTH_M = EXHAUST_BAFFLE_LENGTH_MM / 1000
+EXHAUST_BAFFLE_START_DIA_M = EXHAUST_BAFFLE_START_DIA_MM / 1000
+EXHAUST_BAFFLE_END_DIA_M = EXHAUST_BAFFLE_END_DIA_MM / 1000
+
+# Total expansion chamber length
+EXPANSION_CHAMBER_LENGTH_M = (EXHAUST_HEADER_LENGTH_M + EXHAUST_DIFFUSER_LENGTH_M + 
+                               EXHAUST_BELLY_LENGTH_M + EXHAUST_BAFFLE_LENGTH_M)
+
+# Intake Runner (tuned for ~6000-8000 RPM Helmholtz resonance)
+INTAKE_RUNNER_LENGTH_MM = 180.0       # mm, tuned length
+INTAKE_RUNNER_DIAMETER_MM = 22.0      # mm, carb throat
+INTAKE_RUNNER_LENGTH_M = INTAKE_RUNNER_LENGTH_MM / 1000
+INTAKE_RUNNER_DIAMETER_M = INTAKE_RUNNER_DIAMETER_MM / 1000
+
+# Quasi-1D simulation settings
+PIPE_NUM_SEGMENTS = 7               # Finite-volume cells per pipe
+PIPE_CFL_TARGET = 0.8               # Courant number target
+PIPE_MAX_DT_SUGGEST = 1e-4          # Suggested max timestep (s)
+
+# Tuned resonance frequencies (calculated from geometry)
+# f = c / (2 * L_effective) for open-closed pipe
+# Expansion chamber tuned for ~140 Hz (~8400 RPM for 2-stroke)
+# Intake runner tuned for ~90 Hz (~5400 RPM fundamental)
 
 # Derived engine constants
 BORE_M = ENGINE_BORE_MM / 1000

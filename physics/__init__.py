@@ -6,9 +6,14 @@ for a realistic 2-stroke engine model.
 
 from physics.engine_physics import EnginePhysics, EngineSnapshot
 from physics.cylinder import Cylinder, CylinderState
-from physics.thermodynamics import Thermodynamics
+from physics.thermodynamics import Thermodynamics, EnhancedThermodynamics
 from physics.kinematics import SliderCrankKinematics, KinematicState
 from physics.flows import FlowCalculator, ScavengingCalculator, ScavengingModel, ScavengingState
+from physics.scavenging import AdvancedScavengingModel, ScavengingZones, ScavengingMetrics
+from physics.combustion import AdvancedCombustionModel
+from physics.fuel_drops import FuelDrop, DropletEnsemble, calculate_sauter_mean_diameter
+from physics.carburetor import CarburetorModel, CarburetorState, FuelJetConfig
+from physics.gasdynamics import Quasi1DPipe, ExpansionChamberPipe, IntakeRunnerPipe, PipeSegment
 from physics.friction import FrictionModel, FrictionBreakdown, LubricationRegime
 from physics.constants import (
     MAX_CYLINDER_PRESSURE,
@@ -77,14 +82,30 @@ EnginePhysics.m_cr = property(lambda self: self.m_air_cr + self.m_fuel_cr + self
 def _T_cyl_compat(self):
     return self.cylinders[0].T_cyl if self.cylinders else T_ATM
 
+def _set_T_cyl_compat(self, value):
+    if self.cylinders:
+        self.cylinders[0].T_cyl = value
+
 def _m_air_cyl_compat(self):
     return self.cylinders[0].m_air if self.cylinders else 0.0
+
+def _set_m_air_cyl_compat(self, value):
+    if self.cylinders:
+        self.cylinders[0].m_air = value
 
 def _m_fuel_cyl_compat(self):
     return self.cylinders[0].m_fuel if self.cylinders else 0.0
 
+def _set_m_fuel_cyl_compat(self, value):
+    if self.cylinders:
+        self.cylinders[0].m_fuel = value
+
 def _m_burned_cyl_compat(self):
     return self.cylinders[0].m_burned if self.cylinders else 0.0
+
+def _set_m_burned_cyl_compat(self, value):
+    if self.cylinders:
+        self.cylinders[0].m_burned = value
 
 def _burn_fraction_compat(self):
     return self.cylinders[0].burn_fraction if self.cylinders else 0.0
@@ -102,10 +123,10 @@ def _p_cyl_compat(self):
     return self.cylinders[0].p_cyl if self.cylinders else P_ATM
 
 # Attach properties to EnginePhysics class using property() function
-EnginePhysics.T_cyl = property(_T_cyl_compat)
-EnginePhysics.m_air_cyl = property(_m_air_cyl_compat)
-EnginePhysics.m_fuel_cyl = property(_m_fuel_cyl_compat)
-EnginePhysics.m_burned_cyl = property(_m_burned_cyl_compat)
+EnginePhysics.T_cyl = property(_T_cyl_compat, _set_T_cyl_compat)
+EnginePhysics.m_air_cyl = property(_m_air_cyl_compat, _set_m_air_cyl_compat)
+EnginePhysics.m_fuel_cyl = property(_m_fuel_cyl_compat, _set_m_fuel_cyl_compat)
+EnginePhysics.m_burned_cyl = property(_m_burned_cyl_compat, _set_m_burned_cyl_compat)
 EnginePhysics.burn_fraction = property(_burn_fraction_compat)
 EnginePhysics.combustion_active = property(_combustion_active_compat)
 EnginePhysics.spark_active = property(_spark_active_compat)
@@ -117,10 +138,14 @@ EnginePhysics.throttle_flow_factor = lambda self: self._throttle_flow_factor()
 EnginePhysics.idle_circuit_strength = lambda self: self._idle_circuit_strength()
 
 # Fuel film property
-@property
 def _fuel_film_cyl_compat(self):
     return self.cylinders[0].fuel_film if self.cylinders else 0.0
-EnginePhysics.fuel_film_cyl = _fuel_film_cyl_compat
+
+def _set_fuel_film_cyl_compat(self, value):
+    if self.cylinders:
+        self.cylinders[0].fuel_film = value
+
+EnginePhysics.fuel_film_cyl = property(_fuel_film_cyl_compat, _set_fuel_film_cyl_compat)
 
 # Pipe resonance frequency
 EnginePhysics.pipe_resonance_freq = PIPE_RESONANCE_FREQ_HZ
@@ -134,12 +159,28 @@ __all__ = [
     "EngineSnapshot",
     "Cylinder",
     "CylinderState",
+    "Thermodynamics",
+    "EnhancedThermodynamics",
     "SliderCrankKinematics",
     "KinematicState",
     "FlowCalculator",
     "ScavengingCalculator",
     "ScavengingModel",
     "ScavengingState",
+    "AdvancedScavengingModel",
+    "ScavengingZones",
+    "ScavengingMetrics",
+    "AdvancedCombustionModel",
+    "FuelDrop",
+    "DropletEnsemble",
+    "calculate_sauter_mean_diameter",
+    "CarburetorModel",
+    "CarburetorState",
+    "FuelJetConfig",
+    "Quasi1DPipe",
+    "ExpansionChamberPipe",
+    "IntakeRunnerPipe",
+    "PipeSegment",
     "FrictionModel",
     "FrictionBreakdown",
     "LubricationRegime",

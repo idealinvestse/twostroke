@@ -317,6 +317,11 @@ def run() -> None:
         profile_key = menu.profiles[menu.selected_profile_idx][0] if menu.profiles else "am6_stock"
         quality_preset = menu.quality_presets[menu.selected_quality_idx]
         
+        # Clear event queue after menu exits
+        pygame.event.pump()
+        for event in pygame.event.get():
+            pass  # Discard all pending events
+        
         # Apply display settings if changed
         resolution = menu.resolutions[menu.selected_resolution_idx]
         if menu.fullscreen:

@@ -32,16 +32,35 @@ from physics.constants import (
     PISTON_AREA_M2,
     CLEARANCE_VOLUME_M3,
     CRANKCASE_VOLUME_M3,
+    DISPLACEMENT_M3,
     EXHAUST_PORT_OPEN_M,
     TRANSFER_PORT_OPEN_M,
     EXHAUST_PORT_WIDTH_M,
     TRANSFER_PORT_WIDTH_M,
     PIPE_RESONANCE_FREQ_HZ,
+    # Expansion chamber geometry
+    EXHAUST_HEADER_LENGTH_M,
+    EXHAUST_HEADER_DIAMETER_M,
+    EXHAUST_DIFFUSER_LENGTH_M,
+    EXHAUST_DIFFUSER_START_DIA_M,
+    EXHAUST_DIFFUSER_END_DIA_M,
+    EXHAUST_BELLY_LENGTH_M,
+    EXHAUST_BELLY_DIAMETER_M,
+    EXHAUST_BAFFLE_LENGTH_M,
+    EXHAUST_BAFFLE_START_DIA_M,
+    EXHAUST_BAFFLE_END_DIA_M,
+    INTAKE_RUNNER_LENGTH_M,
+    INTAKE_RUNNER_DIAMETER_M,
+    PIPE_NUM_SEGMENTS,
 )
 from physics.utils import clamp
 from physics.kinematics import SliderCrankKinematics
-from physics.thermodynamics import Thermodynamics, gas_properties
+from physics.thermodynamics import Thermodynamics, gas_properties, EnhancedThermodynamics
 from physics.flows import FlowCalculator, ReedValveState, ExhaustPipeState, ScavengingCalculator, ScavengingModel
+from physics.scavenging import AdvancedScavengingModel, ScavengingZones, ScavengingMetrics
+from physics.combustion import AdvancedCombustionModel
+from physics.carburetor import CarburetorModel
+from physics.gasdynamics import Quasi1DPipe, ExpansionChamberPipe, IntakeRunnerPipe, PipeSegment
 from physics.friction import FrictionModel, FrictionBreakdown
 
 
@@ -186,10 +205,14 @@ class EnginePhysics:
         self.power_ema = 0.0
         self.last_cycle_torque = 0.0
         
-        # Exhaust pipe state
+        # Exhaust pipe state (legacy - used when use_quasi_1d_pipes is False)
         self.p_pipe = MIN_PRESSURE
         self.pipe_phase = 0.0
         self.pipe_amplitude = 0.0
+        
+        # Quasi-1D pipe state references (for backward compatibility in snapshot)
+        self._exhaust_pipe_pressure = P_ATM
+        self._intake_pipe_pressure = P_ATM
         
         # Last computed mass flow rates (primary cylinder)
         self.last_dm_exh = 0.0
@@ -218,14 +241,77 @@ class EnginePhysics:
             displacement_efficiency=0.7
         )
         
+        # === NEW: Advanced Multi-Zone Scavenging Model ===
+        # Feature flag: use True for advanced model, False for legacy
+        self.use_advanced_scavenging = True
+        
+        # Advanced scavenging with RPM and geometry dependence
+        self._advanced_scavenging = AdvancedScavengingModel(
+            bore=BORE_M,
+            stroke=2*HALF_STROKE_M,
+            displacement=DISPLACEMENT_M3,
+        )
+        
+        # === NEW: Advanced Residual-Sensitive Combustion ===
+        # Feature flag: use True for advanced model, False for legacy
+        self.use_advanced_combustion = True
+        
+        # Advanced combustion with residual sensitivity and variable Wiebe parameters
+        self._advanced_combustion = AdvancedCombustionModel()
+        
+        # Track combustion state from advanced scavenging
+        self.residual_fraction = 0.0
+        self.charge_purity = 0.0
+        self.charge_temperature = T_ATM
+        
+        # === NEW: Enhanced Thermodynamics and Heat Transfer ===
+        # Feature flag: use True for enhanced model, False for legacy
+        self.use_enhanced_thermodynamics = True
+        
+        # Enhanced thermodynamics with wall temperature dynamics and variable cp/cv
+        self._enhanced_thermo = EnhancedThermodynamics(
+            bore=BORE_M,
+            stroke=2*HALF_STROKE_M,
+        )
+        
+        # === NEW: Quasi-1D Gasdynamic Pipe Models ===
+        # Feature flag: use True for new gasdynamics, False for legacy
+        self.use_quasi_1d_pipes = True
+        
+        # Expansion chamber with realistic geometry
+        self.exhaust_pipe = ExpansionChamberPipe(
+            header_length=EXHAUST_HEADER_LENGTH_M,
+            header_diameter=EXHAUST_HEADER_DIAMETER_M,
+            diffuser_length=EXHAUST_DIFFUSER_LENGTH_M,
+            diffuser_start_dia=EXHAUST_DIFFUSER_START_DIA_M,
+            diffuser_end_dia=EXHAUST_DIFFUSER_END_DIA_M,
+            belly_length=EXHAUST_BELLY_LENGTH_M,
+            belly_diameter=EXHAUST_BELLY_DIAMETER_M,
+            baffle_length=EXHAUST_BAFFLE_LENGTH_M,
+            baffle_start_dia=EXHAUST_BAFFLE_START_DIA_M,
+            baffle_end_dia=EXHAUST_BAFFLE_END_DIA_M,
+            num_segments=PIPE_NUM_SEGMENTS,
+        )
+        
+        # Intake runner for pressure wave tuning
+        self.intake_pipe = IntakeRunnerPipe(
+            length=INTAKE_RUNNER_LENGTH_M,
+            diameter=INTAKE_RUNNER_DIAMETER_M,
+            num_segments=max(3, PIPE_NUM_SEGMENTS - 2),  # Fewer cells for intake
+        )
+        
         # Friction state
         self._friction_breakdown = None  # type: FrictionBreakdown | None
         
-        # Sub-stepping for better angular resolution
-        self.sub_steps = 4  # Number of sub-steps per timestep (1-8)
+        # === NEW: Physical Carburetor Model ===
+        # Feature flag: use True for physical carburetor with droplet evaporation
+        self.use_physical_carburetor = True
         
-        # For debug
-        self.last_d_q_comb = 0.0
+        # Physical carburetor with venturi and fuel droplets
+        self._carburetor = CarburetorModel()
+        
+        # Initialize subsystems (sub_steps, etc.)
+        self._initialize_subsystems()
         
         # === TRIMMING-PARAMETRAR ===
         # Dessa kan justeras för att simulera olika trimningsalternativ
@@ -268,6 +354,45 @@ class EnginePhysics:
         
         # Apply trimming parameters to derived values
         self._apply_trimming_parameters()
+        
+    def _calculate_exhaust_flow_from_pipe(
+        self, p_cyl: float, T_cyl: float, a_exh: float, p_pipe: float
+    ) -> float:
+        """Calculate exhaust mass flow using pipe pressure (simplified orifice model).
+        
+        This replaces the legacy pipe model with a direct calculation using
+        the quasi-1D pipe pressure at the port.
+        
+        Args:
+            p_cyl: Cylinder pressure (Pa)
+            T_cyl: Cylinder temperature (K)
+            a_exh: Exhaust port area (m²)
+            p_pipe: Pipe pressure at port (Pa)
+            
+        Returns:
+            Mass flow rate (kg/s), positive = outflow, negative = backflow
+        """
+        if a_exh < 1e-9:
+            return 0.0
+            
+        # Discharge coefficient
+        c_d = 0.7  # DISCHARGE_COEF_EXHAUST
+        
+        if p_cyl > p_pipe:
+            # Outflow to pipe
+            return Thermodynamics.mass_flow(c_d, a_exh, p_cyl, T_cyl, p_pipe)
+        else:
+            # Backflow from pipe (simplified - assume pipe gas is cooler)
+            T_pipe = T_cyl * 0.9
+            return -Thermodynamics.mass_flow(c_d, a_exh, p_pipe, T_pipe, p_cyl)
+
+    def _initialize_subsystems(self) -> None:
+        """Initialize subsystem parameters after main init."""
+        # Sub-stepping for better angular resolution
+        self.sub_steps = 4  # Number of sub-steps per timestep (1-8)
+        
+        # For debug
+        self.last_d_q_comb = 0.0
     
     def _apply_trimming_parameters(self) -> None:
         """Apply trimming parameters to derived geometry and physics values."""
@@ -327,6 +452,130 @@ class EnginePhysics:
     @property
     def spark_active(self) -> bool:
         return self.cylinders[0].spark_active
+    
+    def set_gasdynamic_model(self, use_quasi_1d: bool) -> None:
+        """Toggle between legacy and quasi-1D gasdynamic models.
+        
+        Args:
+            use_quasi_1d: True for quasi-1D finite-volume, False for legacy lumped model
+        """
+        self.use_quasi_1d_pipes = use_quasi_1d
+        if use_quasi_1d:
+            # Reset pipes to atmospheric conditions
+            for seg in self.exhaust_pipe.segments:
+                density = P_ATM / (R_GAS * T_ATM)
+                seg.set_primitive(density, 0.0, P_ATM)
+            for seg in self.intake_pipe.segments:
+                density = P_ATM / (R_GAS * T_ATM)
+                seg.set_primitive(density, 0.0, P_ATM)
+    
+    def get_exhaust_pipe_status(self) -> dict:
+        """Get current status of exhaust pipe (quasi-1D model).
+        
+        Returns:
+            Dictionary with pipe statistics
+        """
+        if not self.use_quasi_1d_pipes:
+            return {
+                'model': 'legacy',
+                'pressure': self.p_pipe,
+                'amplitude': self.pipe_amplitude,
+            }
+        
+        pressures = [seg.pressure for seg in self.exhaust_pipe.segments]
+        temps = [seg.temperature for seg in self.exhaust_pipe.segments]
+        velocities = [seg.velocity for seg in self.exhaust_pipe.segments]
+        
+        return {
+            'model': 'quasi-1d',
+            'segments': self.exhaust_pipe.num_segments,
+            'port_pressure': self.exhaust_pipe.get_port_pressure(is_left=True),
+            'avg_pressure': sum(pressures) / len(pressures),
+            'min_pressure': min(pressures),
+            'max_pressure': max(pressures),
+            'avg_temperature': sum(temps) / len(temps),
+            'max_velocity': max(abs(v) for v in velocities),
+        }
+    
+    def set_scavenging_model(self, use_advanced: bool) -> None:
+        """Toggle between legacy and advanced scavenging models.
+        
+        Args:
+            use_advanced: True for multi-zone RPM-dependent model, False for legacy
+        """
+        self.use_advanced_scavenging = use_advanced
+    
+    def get_scavenging_status(self) -> dict:
+        """Get current scavenging model status.
+        
+        Returns:
+            Dictionary with scavenging statistics
+        """
+        if not self.use_advanced_scavenging:
+            return {
+                'model': 'legacy',
+                'trapping_efficiency': self.trapping_efficiency,
+            }
+        
+        return {
+            'model': 'advanced',
+            'trapping_efficiency': self.trapping_efficiency,
+            'optimal_rpm': self._advanced_scavenging.optimal_rpm,
+            'base_scavenging_efficiency': self._advanced_scavenging.base_scavenging_efficiency,
+        }
+    
+    def set_combustion_model(self, use_advanced: bool) -> None:
+        """Toggle between legacy and advanced combustion models.
+        
+        Args:
+            use_advanced: True for residual-sensitive model, False for legacy
+        """
+        self.use_advanced_combustion = use_advanced
+    
+    def get_combustion_status(self) -> dict:
+        """Get current combustion model status.
+        
+        Returns:
+            Dictionary with combustion statistics
+        """
+        if not self.use_advanced_combustion:
+            return {
+                'model': 'legacy',
+                'residual_fraction': self.residual_fraction,
+                'charge_purity': self.charge_purity,
+            }
+        
+        return {
+            'model': 'advanced',
+            'residual_fraction': self.residual_fraction,
+            'charge_purity': self.charge_purity,
+            'charge_temperature': self.charge_temperature,
+        }
+    
+    def set_thermodynamics_model(self, use_enhanced: bool) -> None:
+        """Toggle between legacy and enhanced thermodynamics models.
+        
+        Args:
+            use_enhanced: True for enhanced model with wall temperature dynamics, False for legacy
+        """
+        self.use_enhanced_thermodynamics = use_enhanced
+    
+    def get_thermodynamics_status(self) -> dict:
+        """Get current thermodynamics model status.
+        
+        Returns:
+            Dictionary with thermodynamics statistics
+        """
+        if not self.use_enhanced_thermodynamics:
+            return {
+                'model': 'legacy',
+            }
+        
+        return {
+            'model': 'enhanced',
+            'cylinder_wall_temp': self._enhanced_thermo.t_wall_cylinder,
+            'crankcase_wall_temp': self._enhanced_thermo.t_wall_crankcase,
+        }
     
     def _initialize_masses(self) -> None:
         """Initialize gas masses from atmospheric conditions."""
@@ -448,9 +697,26 @@ class EnginePhysics:
         p_cr = self._calculate_crankcase_pressure(total_v_cr)
         
         # 3. Intake Flow (shared crankcase)
+        
+        # === NEW: Update intake pipe if using quasi-1D model ===
+        if self.use_quasi_1d_pipes:
+            # Set intake pipe boundaries
+            self.intake_pipe.set_left_boundary_atmosphere(P_ATM, T_ATM)
+            self.intake_pipe.set_crankcase_connection(p_cr, self.T_cr, 0.0)  # Port area updated per-cylinder
+            # Step intake pipe
+            self.intake_pipe.step(dt)
+            # Get pressure at reed valve for intake calculation
+            intake_pipe_pressure = self.intake_pipe.get_pressure_at_reed_valve()
+        else:
+            intake_pipe_pressure = P_ATM
+        
         intake_cond = self._flow_calc.calculate_intake_conditions(
             p_cr, self.throttle, self.idle_fuel_trim
         )
+        # Override with pipe pressure if using quasi-1D
+        if self.use_quasi_1d_pipes:
+            intake_cond.pressure = intake_pipe_pressure
+        
         reed = ReedValveState(self.reed_opening, self.reed_velocity)
         reed = self._flow_calc.update_reed_valve(reed, intake_cond.pressure, p_cr, dt)
         self.reed_opening = reed.opening
@@ -463,24 +729,67 @@ class EnginePhysics:
         
         dm_fuel_in = 0.0
         if not self.fuel_cutoff:
-            target_fa = self._target_fuel_air_ratio()
-            intake_signal = clamp((intake_cond.pressure - p_cr) / P_ATM, 0.0, 1.4)
-            main_fuel_signal = 0.95 + 0.15 * math.sqrt(intake_signal + 1e-9)
-            idle_fuel_signal = (0.82 + 0.45 * self.idle_fuel_trim) * (0.35 + 0.65 * intake_cond.idle_circuit)
-            
-            raw_fuel_main = dm_air_main * target_fa * main_fuel_signal
-            raw_fuel_idle = dm_air_idle * target_fa * idle_fuel_signal
-            wet_fraction = max(0.15, 0.50 - 0.30 * throttle_factor)
-            dm_fuel_in = (raw_fuel_main + raw_fuel_idle) * (1.0 - wet_fraction)
-            
-            film_added = (raw_fuel_main + raw_fuel_idle) * wet_fraction * dt
-            self.fuel_film_cr += film_added
-            evaporated = min(self.fuel_film_cr, self.fuel_film_cr * 0.2 * dt)
-            self.fuel_film_cr -= evaporated
-            dm_fuel_in += evaporated / max(dt, 1e-6)
+            # === NEW: Physical Carburetor Model ===
+            if self.use_physical_carburetor:
+                # Update carburetor with venturi physics
+                carb_state = self._carburetor.update(
+                    dt=dt,
+                    p_upstream=P_ATM,
+                    T_upstream=T_ATM,
+                    throttle_position=self.throttle,
+                    choke_position=0.0,  # Choke could be added as a control input
+                )
+                
+                # Use carburetor air flow instead of simple calculation
+                dm_air_in = carb_state.m_dot_air
+                
+                # Update fuel droplets in intake/crankcase
+                # Wall position represents distance to crankcase (approximate)
+                wall_position = 0.15  # m, typical intake runner length
+                vaporized, wall_film, remaining = self._carburetor.update_droplets(
+                    dt=dt,
+                    p_gas=p_cr,
+                    T_gas=self.T_cr,
+                    v_gas=dm_air_in / (0.001 * 1.2),  # Approximate velocity
+                    wall_position=wall_position,
+                )
+                
+                # Add wall film to crankcase fuel film
+                self.fuel_film_cr += wall_film
+                
+                # Evaporate existing fuel film
+                film_evap_rate = 2.0 + 0.03 * max(0.0, self.T_cr - T_ATM)  # Temperature dependent
+                film_evaporated = min(self.fuel_film_cr, self.fuel_film_cr * film_evap_rate * dt)
+                self.fuel_film_cr -= film_evaporated
+                
+                # Total fuel entering crankcase: vaporized droplets + film evaporation
+                dm_fuel_in = vaporized + film_evaporated
+                
+            else:
+                # Legacy fuel calculation
+                target_fa = self._target_fuel_air_ratio()
+                intake_signal = clamp((intake_cond.pressure - p_cr) / P_ATM, 0.0, 1.4)
+                main_fuel_signal = 0.95 + 0.15 * math.sqrt(intake_signal + 1e-9)
+                idle_fuel_signal = (0.82 + 0.45 * self.idle_fuel_trim) * (0.35 + 0.65 * intake_cond.idle_circuit)
+                
+                raw_fuel_main = dm_air_main * target_fa * main_fuel_signal
+                raw_fuel_idle = dm_air_idle * target_fa * idle_fuel_signal
+                wet_fraction = max(0.15, 0.50 - 0.30 * throttle_factor)
+                dm_fuel_in = (raw_fuel_main + raw_fuel_idle) * (1.0 - wet_fraction)
+                
+                film_added = (raw_fuel_main + raw_fuel_idle) * wet_fraction * dt
+                self.fuel_film_cr += film_added
+                evaporated = min(self.fuel_film_cr, self.fuel_film_cr * 0.2 * dt)
+                self.fuel_film_cr -= evaporated
+                dm_fuel_in += evaporated / max(dt, 1e-6)
             
             self.m_air_cr += dm_air_in * dt
             self.m_fuel_cr += dm_fuel_in * dt
+        
+        # === NEW: Setup exhaust pipe boundaries before cylinder loop ===
+        if self.use_quasi_1d_pipes:
+            self.exhaust_pipe.set_right_boundary_atmosphere(P_ATM, T_ATM)
+            # Left boundary connected to cylinder, updated per-cylinder
         
         # 4. Per-cylinder updates
         total_torque = 0.0
@@ -501,13 +810,26 @@ class EnginePhysics:
                 kin.x, self.x_exh, self.w_exh, self.x_tr, self.w_tr
             )
             
-            # Exhaust flow
-            pipe = ExhaustPipeState(self.p_pipe, self.pipe_phase, self.pipe_amplitude)
-            dm_exh = self._flow_calc.calculate_exhaust_flow(p_cyl, cyl.T_cyl, ports.exhaust, pipe)
-            pipe = self._flow_calc.update_exhaust_pipe(pipe, dm_exh, ports.exhaust, self.omega, dt)
-            self.p_pipe = pipe.pressure
-            self.pipe_phase = pipe.phase
-            self.pipe_amplitude = pipe.amplitude
+            # Exhaust flow - legacy or quasi-1D
+            if self.use_quasi_1d_pipes:
+                # Update exhaust pipe boundary for this cylinder
+                self.exhaust_pipe.set_left_boundary_cylinder(
+                    p_cyl, cyl.T_cyl, ports.exhaust
+                )
+                # Get pressure at port from pipe
+                p_exhaust = self.exhaust_pipe.get_port_pressure(is_left=True)
+                # Calculate mass flow using pipe pressure
+                dm_exh = self._calculate_exhaust_flow_from_pipe(
+                    p_cyl, cyl.T_cyl, ports.exhaust, p_exhaust
+                )
+            else:
+                # Legacy exhaust pipe model
+                pipe = ExhaustPipeState(self.p_pipe, self.pipe_phase, self.pipe_amplitude)
+                dm_exh = self._flow_calc.calculate_exhaust_flow(p_cyl, cyl.T_cyl, ports.exhaust, pipe)
+                pipe = self._flow_calc.update_exhaust_pipe(pipe, dm_exh, ports.exhaust, self.omega, dt)
+                self.p_pipe = pipe.pressure
+                self.pipe_phase = pipe.phase
+                self.pipe_amplitude = pipe.amplitude
             
             # Transfer flow
             dm_tr = self._flow_calc.calculate_transfer_flow(p_cr, self.T_cr, p_cyl, ports.transfer)
@@ -526,20 +848,62 @@ class EnginePhysics:
                 if cr_fa_ratio > 0.3:
                     transfer_mass *= 0.1
                 
-                # Short-circuit loss during port overlap
-                # When both exhaust and transfer ports are open, fresh charge can exit directly
-                short_circuit_loss = 0.0
-                if ports.exhaust > 0 and ports.transfer > 0:
-                    # Short-circuit fraction depends on relative port areas
-                    overlap_fraction = min(ports.exhaust, ports.transfer) / max(ports.exhaust, ports.transfer, 1e-9)
-                    # Base short-circuit loss 15%, increased by overlap
-                    short_circuit_fraction = 0.15 + 0.10 * overlap_fraction
-                    short_circuit_loss = transfer_mass * short_circuit_fraction
-                    transfer_mass -= short_circuit_loss
-                
-                transferred_air = transfer_mass * self.m_air_cr / crankcase_total
-                transferred_fuel = transfer_mass * self.m_fuel_cr / crankcase_total
-                transferred_burned = transfer_mass * self.m_residual_cr / crankcase_total
+                # === NEW: Use advanced multi-zone scavenging model ===
+                if self.use_advanced_scavenging:
+                    # Calculate RPM for scavenging model
+                    rpm = self.omega * 30 / math.pi
+                    
+                    # Calculate port overlap in degrees
+                    overlap_deg = 0.0
+                    if ports.exhaust > 0 and ports.transfer > 0:
+                        overlap_deg = self.port_overlap  # Use trimming parameter
+                    
+                    # Use advanced scavenging model
+                    zones, metrics = self._advanced_scavenging.calculate_multi_zone_scavenging(
+                        m_fresh_delivered=transfer_mass,
+                        m_residual_initial=cyl.m_burned,
+                        m_fresh_initial=cyl.m_air + cyl.m_fuel,
+                        rpm=rpm,
+                        exhaust_port_height=self.exhaust_port_height,
+                        transfer_port_height=self.transfer_port_height,
+                        port_overlap_deg=overlap_deg,
+                        cylinder_volume=kin.v_cyl,
+                    )
+                    
+                    # Apply multi-zone results
+                    # Fresh charge from crankcase to cylinder
+                    transferred_air = zones.fresh_direct * (self.m_air_cr / crankcase_total)
+                    transferred_fuel = zones.fresh_direct * (self.m_fuel_cr / crankcase_total)
+                    # Note: transferred_burned is NOT from crankcase, it's residuals being pushed out of cylinder
+                    transferred_burned = 0.0  # Crankcase has no burned gas to transfer
+                    
+                    # Short-circuit loss from advanced model (fresh charge lost to exhaust)
+                    short_circuit_loss = zones.short_circuit
+                    
+                    # Update cylinder masses based on zones
+                    cyl.m_burned = zones.total_residual
+                    cyl.m_air += zones.fresh_direct * (self.m_air_cr / crankcase_total)
+                    cyl.m_fuel += zones.fresh_direct * (self.m_fuel_cr / crankcase_total)
+                    
+                    # Track combustion state variables for advanced combustion
+                    self.residual_fraction = metrics.residual_fraction
+                    self.charge_purity = metrics.fresh_fraction
+                    self.charge_temperature = cyl.T_cyl
+                    
+                    # Update efficiency tracking
+                    self.trapping_efficiency = metrics.trapping_efficiency
+                else:
+                    # Legacy short-circuit loss during port overlap
+                    short_circuit_loss = 0.0
+                    if ports.exhaust > 0 and ports.transfer > 0:
+                        overlap_fraction = min(ports.exhaust, ports.transfer) / max(ports.exhaust, ports.transfer, 1e-9)
+                        short_circuit_fraction = 0.15 + 0.10 * overlap_fraction
+                        short_circuit_loss = transfer_mass * short_circuit_fraction
+                        transfer_mass -= short_circuit_loss
+                    
+                    transferred_air = transfer_mass * self.m_air_cr / crankcase_total
+                    transferred_fuel = transfer_mass * self.m_fuel_cr / crankcase_total
+                    transferred_burned = transfer_mass * self.m_residual_cr / crankcase_total
                 
                 dm_air_tr = transferred_air / max(dt, 1e-6)
                 dm_fuel_tr = transferred_fuel / max(dt, 1e-6)
@@ -601,9 +965,18 @@ class EnginePhysics:
             cyl.evaporate_cylinder_fuel_film(dt, self.fuel_cutoff)
             
             # Combustion
-            heat = cyl.update_combustion(self.theta, kin.x, dt, 
-                self.ignition_angle_deg, self.ignition_enabled, 
-                self.fuel_cutoff, throttle_factor, self.omega)
+            if self.use_advanced_combustion:
+                heat = cyl.update_combustion(self.theta, kin.x, dt, 
+                    self.ignition_angle_deg, self.ignition_enabled, 
+                    self.fuel_cutoff, throttle_factor, self.omega,
+                    advanced_combustion_model=self._advanced_combustion,
+                    residual_fraction=self.residual_fraction,
+                    charge_purity=self.charge_purity,
+                    charge_temperature=self.charge_temperature)
+            else:
+                heat = cyl.update_combustion(self.theta, kin.x, dt, 
+                    self.ignition_angle_deg, self.ignition_enabled, 
+                    self.fuel_cutoff, throttle_factor, self.omega)
             
             # Energy balance with mass-change internal energy correction
             # dU = dQ_comb + h_in*dm_in - p*dV + T*C_V*dm_net
@@ -649,6 +1022,13 @@ class EnginePhysics:
                 self.last_dm_burned_exh = dm_burned_exh
             
             all_cyl_states.append(cyl.get_state(kin.x))
+        
+        # === NEW: Step exhaust pipe after all cylinder updates ===
+        if self.use_quasi_1d_pipes:
+            _ = self.exhaust_pipe.step(dt)  # Returns actual dt used, ignored here
+            # Update legacy pipe state for backward compatibility in snapshot
+            self._exhaust_pipe_pressure = self.exhaust_pipe.get_port_pressure(is_left=True)
+            self.p_pipe = self._exhaust_pipe_pressure  # For legacy compatibility
         
         # 5. Crankcase energy balance
         sum_d_v_cyl = sum(self.A_p * d['kin'].dx_dtheta * self.omega * dt for d in cyl_data)

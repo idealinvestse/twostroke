@@ -12,8 +12,8 @@ from physics.constants import (
     FUEL_LHV, STOICH_AFR,
     BORE_M,
 )
-from physics.utils import clamp
-from physics.combustion import CombustionModel
+from physics.utils import clamp, clamp01
+from physics.combustion import CombustionModel, AdvancedCombustionModel
 
 @dataclass
 class CylinderState:
@@ -73,8 +73,19 @@ class Cylinder:
 
     def update_combustion(self, theta: float, x: float, dt: float, 
                           ignition_angle_deg: float, ignition_enabled: bool, 
-                          fuel_cutoff: bool, throttle_factor: float, omega: float = 90.0) -> float:
-        """Update combustion state and return heat released (J)."""
+                          fuel_cutoff: bool, throttle_factor: float, omega: float = 90.0,
+                          advanced_combustion_model = None,
+                          residual_fraction: float = 0.0,
+                          charge_purity: float = 0.0,
+                          charge_temperature: float = 293.15) -> float:
+        """Update combustion state and return heat released (J).
+        
+        Args:
+            advanced_combustion_model: Optional AdvancedCombustionModel for residual-sensitive combustion
+            residual_fraction: Residual gas fraction (0-1)
+            charge_purity: Charge purity from scavenging (0-1)
+            charge_temperature: Initial charge temperature (K)
+        """
         theta_eff = (theta + self.crank_offset) % (2 * math.pi)
         theta_deg = math.degrees(theta_eff) % 360.0
         fresh_mass = self.m_air + self.m_fuel
@@ -94,14 +105,64 @@ class Cylinder:
             self.combustion_active = True
             self.spark_active = True
             
-            self.combustion_state = CombustionModel.start_combustion(
-                theta=theta_eff,
-                m_fuel_cyl=self.m_fuel,
-                m_air_cyl=self.m_air,
-                throttle_factor=throttle_factor,
-                ignition_angle_deg=ignition_angle_deg,
-                omega=omega,
-            )
+            # Use advanced combustion model if provided
+            if advanced_combustion_model is not None:
+                # Calculate lambda
+                actual_fuel_air_ratio = self.m_fuel / max(1e-9, self.m_air)
+                lambda_value = (1.0 / max(1e-9, actual_fuel_air_ratio)) / STOICH_AFR
+                
+                # Calculate efficiency with residual sensitivity
+                efficiency = advanced_combustion_model.calculate_combustion_efficiency(
+                    lambda_value=lambda_value,
+                    residual_fraction=residual_fraction,
+                    charge_purity=charge_purity,
+                    ignition_angle_deg=ignition_angle_deg,
+                )
+                
+                # Calculate burn duration with temperature effects
+                turbulence = 0.65 + 0.70 * throttle_factor + 0.25 * clamp01(abs(omega) / 260.0)
+                turbulence = max(0.1, turbulence)
+                duration_deg = 55.0 / turbulence
+                
+                # Lambda affects burn duration
+                if lambda_value < 0.85:
+                    duration_deg *= 1.10
+                elif lambda_value > 1.10:
+                    duration_deg *= 1.25
+                
+                # Temperature affects burn duration
+                temp_factor = 1.0 + 0.001 * max(0.0, charge_temperature - T_ATM)
+                duration_deg /= temp_factor
+                
+                duration = math.radians(max(18.0, min(65.0, duration_deg)))
+                
+                # Fuel that actually burns
+                available_fuel = min(self.m_fuel, self.m_air / STOICH_AFR)
+                combustible_fuel = available_fuel * min(1.0, 0.70 + 0.30 * efficiency)
+                
+                # Use advanced combustion state
+                from physics.combustion import CombustionState
+                self.combustion_state = CombustionState(
+                    active=True,
+                    burn_fraction=0.0,
+                    theta_ign=theta_eff,
+                    duration=duration,
+                    efficiency=efficiency,
+                    lambda_value=lambda_value,
+                    available_fuel=combustible_fuel,
+                    residual_fraction=residual_fraction,
+                    charge_temperature=charge_temperature,
+                )
+            else:
+                # Legacy model
+                self.combustion_state = CombustionModel.start_combustion(
+                    theta=theta_eff,
+                    m_fuel_cyl=self.m_fuel,
+                    m_air_cyl=self.m_air,
+                    throttle_factor=throttle_factor,
+                    ignition_angle_deg=ignition_angle_deg,
+                    omega=omega,
+                )
             
             self.burn_fraction = self.combustion_state.burn_fraction
             self.theta_ign = self.combustion_state.theta_ign
@@ -112,13 +173,85 @@ class Cylinder:
             
         heat_released = 0.0
         if self.combustion_active and self.combustion_state is not None:
-            self.combustion_state, heat_released = CombustionModel.update_combustion(
-                combustion=self.combustion_state,
-                theta=theta_eff,
-                m_fuel_cyl=self.m_fuel,
-                m_air_cyl=self.m_air,
-                dt=dt,
-            )
+            # Use advanced model with variable Wiebe parameters if available
+            if advanced_combustion_model is not None and hasattr(self.combustion_state, 'residual_fraction'):
+                # Calculate variable Wiebe parameters based on current conditions
+                a1, m1, a2, m2, alpha = advanced_combustion_model.calculate_wiebe_parameters(
+                    lambda_value=self.combustion_state.lambda_value,
+                    residual_fraction=self.combustion_state.residual_fraction,
+                    charge_temp=self.combustion_state.charge_temperature,
+                    charge_purity=charge_purity,
+                )
+                
+                # Calculate progress with variable parameters
+                dtheta = (theta_eff - self.combustion_state.theta_ign) % (2 * math.pi)
+                
+                if dtheta >= self.combustion_state.duration:
+                    # Combustion complete
+                    from physics.combustion import CombustionState
+                    self.combustion_state = CombustionState(
+                        active=False,
+                        burn_fraction=1.0,
+                        theta_ign=self.combustion_state.theta_ign,
+                        duration=self.combustion_state.duration,
+                        efficiency=self.combustion_state.efficiency,
+                        lambda_value=self.combustion_state.lambda_value,
+                        available_fuel=0.0,
+                        residual_fraction=self.combustion_state.residual_fraction,
+                        charge_temperature=self.combustion_state.charge_temperature,
+                    )
+                else:
+                    # Two-phase Wiebe with variable parameters
+                    phase = min(1.0, dtheta / max(self.combustion_state.duration, 1e-6))
+                    x_b1 = 1.0 - math.exp(-a1 * (phase ** m1))
+                    x_b2 = 1.0 - math.exp(-a2 * (phase ** m2))
+                    new_fraction = alpha * x_b1 + (1.0 - alpha) * x_b2
+                    delta_fraction = max(0.0, new_fraction - self.combustion_state.burn_fraction)
+                    
+                    # Calculate fuel burned
+                    fuel_burned = min(
+                        self.combustion_state.available_fuel * delta_fraction,
+                        self.m_fuel
+                    )
+                    
+                    # Calculate air consumed
+                    air_consumed = fuel_burned * STOICH_AFR
+                    if air_consumed > self.m_air:
+                        air_consumed = self.m_air
+                        fuel_burned = air_consumed / STOICH_AFR
+                    
+                    # Calculate heat release
+                    heat_released = fuel_burned * FUEL_LHV
+                    
+                    # Update state
+                    self.combustion_state.burn_fraction = new_fraction
+                    
+                    # Update masses
+                    self.m_fuel -= fuel_burned
+                    self.m_air -= air_consumed
+                    self.m_burned += fuel_burned + air_consumed
+            else:
+                # Legacy model
+                self.combustion_state, heat_released = CombustionModel.update_combustion(
+                    combustion=self.combustion_state,
+                    theta=theta_eff,
+                    m_fuel_cyl=self.m_fuel,
+                    m_air_cyl=self.m_air,
+                    dt=dt,
+                )
+                
+                if heat_released > 0:
+                    fuel_burned = heat_released / FUEL_LHV
+                    air_consumed = fuel_burned * STOICH_AFR
+                    
+                    if air_consumed > self.m_air:
+                        air_consumed = self.m_air
+                        fuel_burned = air_consumed / STOICH_AFR
+                        heat_released = fuel_burned * FUEL_LHV
+                    
+                    self.m_fuel -= fuel_burned
+                    self.m_air -= air_consumed
+                    self.m_burned += fuel_burned + air_consumed
             
             self.combustion_active = self.combustion_state.active
             self.burn_fraction = self.combustion_state.burn_fraction

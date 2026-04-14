@@ -682,16 +682,23 @@ def apply_profile(engine, profile_key: str) -> None:
 
     # Återinitiera massor baserat på ny volym
     from physics import P_ATM, R_GAS, T_ATM
-    engine.m_cyl = engine.V_c * P_ATM / (R_GAS * T_ATM)
-    engine.m_cr  = engine.V_cr_min * P_ATM / (R_GAS * T_ATM)
     engine.T_cyl = T_ATM
     engine.T_cr  = T_ATM
-    engine.m_air_cyl    = engine.m_cyl
-    engine.m_fuel_cyl   = 0.0
-    engine.m_burned_cyl = 0.0
-    engine.m_air_cr     = engine.m_cr
-    engine.m_fuel_cr    = 0.0
+    
+    # Set crankcase mass components first (to avoid setter issues)
+    engine.m_fuel_cr = 0.0
     engine.m_residual_cr = 0.0
+    engine.m_air_cr = engine.V_cr_min * P_ATM / (R_GAS * T_ATM)
+    
+    # Set cylinder mass components first
+    engine.m_fuel_cyl = 0.0
+    engine.m_burned_cyl = 0.0
+    engine.m_air_cyl = engine.V_c * P_ATM / (R_GAS * T_ATM)
+    
+    # Now set the total properties (for backward compatibility)
+    engine.m_cyl = engine.m_air_cyl + engine.m_fuel_cyl + engine.m_burned_cyl
+    engine.m_cr = engine.m_air_cr + engine.m_fuel_cr + engine.m_residual_cr
+    
     engine.fuel_film_cr = 0.0
     engine.fuel_film_cyl = 0.0
 
