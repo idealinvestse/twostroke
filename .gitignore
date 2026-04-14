@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Pytest
+.pytest_cache/
+.benchmarks/
+
+# IDE
+.windsurf/
+.vscode/
+.idea/
+
+# Large binaries - download separately
+godot_engine/Godot_v4.6.2-stable_win64.exe
+godot_engine/Godot_v4.6.2-stable_win64_console.exe
+*.exe
+
+# OS
+Thumbs.db
+.DS_Store
