@@ -167,12 +167,7 @@ class EnginePhysics:
         self.cycle_work = 0.0
         self.last_cycle_torque = 0.0
         
-        # Simple tuned pipe model
-        self.p_pipe = P_ATM
-        self.pipe_resonance_freq = 140.0  # Hz (roughly 8400 RPM)
-        self.pipe_q_factor = 2.5
-        self.pipe_phase = 0.0
-        self.pipe_amplitude = 0.0
+        # Simple tuned pipe model - uses values from tuning parameters above
 
     @staticmethod
     def angle_diff(a: float, b: float) -> float:
@@ -224,12 +219,12 @@ class EnginePhysics:
     def throttle_flow_factor(self) -> float:
         return 0.04 + 0.96 * (self.throttle ** 1.35)
 
-    def idle_circuit_strength(self) -> float:
+    def get_idle_circuit_strength(self) -> float:
         return max(0.0, min(1.0, (0.32 - self.throttle) / 0.32))
 
     def intake_conditions(self, p_cr: float) -> tuple[float, float, float, float, float]:
         throttle_factor = self.throttle_flow_factor()
-        idle_circuit = self.idle_circuit_strength()
+        idle_circuit = self.get_idle_circuit_strength()
         p_intake = min(P_ATM, P_ATM * (0.35 + 0.65 * throttle_factor) + P_ATM * 0.04 * idle_circuit * self.idle_fuel_trim)
         if p_intake <= p_cr:
             return throttle_factor, idle_circuit, p_intake, 0.0, 0.0

@@ -517,7 +517,7 @@ def update_particles(particles: list[Particle], state, engine, cylinder_y: float
                 piston_vel = engine.R * math.sin(engine.theta) * engine.omega * RENDER.scale * PISTON_VEL_SCALE
                 particle.vy += piston_vel * 0.1
                 if particle.vy > 0:
-                    particle.vy = min(0.0, particle.vy)
+                    particle.vy = max(0.0, particle.vy)
                 
         elif particle.region == "exhaust":
             if state.dm_exh > 0:
