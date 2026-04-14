@@ -14,10 +14,12 @@ import time
 from collections import deque
 
 # Add parent directory to path to import physics modules (relative path)
+# Note: Imports must come after path manipulation (ruff: ignore)
 _parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, _parent_dir)
 
 from physics import EnginePhysics
+from engine_profiles import apply_profile
 
 # Server configuration
 HOST = '127.0.0.1'
@@ -38,6 +40,11 @@ class PhysicsServer:
         self.running = True
         self._starter_pressed = False
         self._tick_count = 0
+        
+        # Pause and restart state
+        self.paused = False
+        self.restart_requested = False
+        self._current_profile_key = "am6_stock"
         
         # Create TCP socket
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -81,15 +88,28 @@ class PhysicsServer:
                 print(f"Connection error: {e}")
                 break
             
-            # Physics update at 600 Hz
+            # Check for restart request
+            if self.restart_requested:
+                self._restart_simulation()
+                self.restart_requested = False
+            
+            # Physics update at 600 Hz (only when not paused)
             current_time = time.time()
             if current_time >= next_update:
                 try:
-                    state = self.step_physics()
+                    if not self.paused:
+                        state = self.step_physics()
+                    else:
+                        # When paused, just get current state without stepping
+                        state = self.engine.snapshot() if hasattr(self.engine, 'snapshot') else None
+                    
                     self._tick_count += 1
                     
                     # Send state to Godot at 60 Hz (time-based to be more robust)
                     if current_time - last_send_time >= send_interval:
+                        if state is None:
+                            # Create minimal state if paused and no snapshot
+                            state = self._create_minimal_state()
                         self.send_state(conn, state)
                         last_send_time = current_time
                     
@@ -144,6 +164,15 @@ class PhysicsServer:
                     val = float(value)
                     if -0.5 <= val <= 0.5:
                         self.engine.idle_fuel_trim = val
+                elif key == 'PAUSE':
+                    self.paused = value.upper() in ('TRUE', '1', 'YES')
+                    print(f"Simulation {'paused' if self.paused else 'resumed'}")
+                elif key == 'RESTART':
+                    self.restart_requested = True
+                    print("Restart requested")
+                elif key == 'PROFILE':
+                    self._current_profile_key = value
+                    print(f"Profile selected: {value}")
                     
         except (ValueError, AttributeError) as e:
             print(f"Command error: {e}")
@@ -218,6 +247,58 @@ class PhysicsServer:
             pass
         except Exception as e:
             print(f"Send error: {e}")
+    
+    def _restart_simulation(self):
+        """Restart the simulation - reset engine to cold start state."""
+        print("Restarting simulation...")
+        
+        # Store current profile for reapplication
+        profile_key = self._current_profile_key
+        
+        # Create new engine instance
+        self.engine = EnginePhysics()
+        
+        # Try to apply profile if available
+        try:
+            apply_profile(self.engine, profile_key)
+            print(f"Applied profile: {profile_key}")
+        except Exception as e:
+            print(f"Could not apply profile {profile_key}: {e}")
+        
+        # Reset state tracking
+        self.pv_cyl_points.clear()
+        self.pv_cr_points.clear()
+        self._tick_count = 0
+        self._starter_pressed = False
+        self.paused = False
+        
+        print("Simulation restarted")
+    
+    def _create_minimal_state(self):
+        """Create minimal state object when paused."""
+        # Create a simple object with required attributes
+        class MinimalState:
+            pass
+        
+        state = MinimalState()
+        state.rpm = 0.0
+        state.x = 0.0
+        state.p_cyl = 101325.0  # Atmospheric pressure
+        state.p_cr = 101325.0
+        state.p_exh_pipe = 101325.0
+        state.T_cyl = 293.0  # Room temperature
+        state.burn_fraction = 0.0
+        state.combustion_active = False
+        state.spark_active = False
+        state.power_kw = 0.0
+        state.torque = 0.0
+        state.volumetric_efficiency = 0.0
+        state.trapping_efficiency = 0.0
+        state.a_exh = 0.0
+        state.a_tr = 0.0
+        state.a_in = 0.0
+        
+        return state
     
     def run(self):
         """Main server loop."""

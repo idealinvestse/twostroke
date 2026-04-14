@@ -39,8 +39,8 @@ class RenderConfig:
     hd_render_scale: float = 1.0  # 1.0 = native, 1.5 = 1.5x, 2.0 = 2x resolution
     enable_hd_render: bool = True
     
-    # Bloom settings (requires HIGH/ULTRA preset for performance)
-    enable_bloom: bool = False  # Disabled by default due to CPU-bound performance
+    # Bloom settings (requires GPU shaders - CPU implementation not viable)
+    enable_bloom: bool = False  # Disabled - CPU-bound pixel iteration too slow for real-time
     bloom_threshold: float = 0.7
     bloom_intensity: float = 1.0
     bloom_sigma: float = 4.0

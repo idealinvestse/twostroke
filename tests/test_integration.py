@@ -4,10 +4,26 @@ This test runs the engine for an extended duration to check for numerical drift 
 """
 import unittest
 
+import config as config_module
+import particles as particles_module
+import renderer as renderer_module
+from app import apply_render_config
 from physics import EnginePhysics
 
 
 class LongRunningStabilityTests(unittest.TestCase):
+    def test_render_config_propagates_to_cached_module_references(self) -> None:
+        original_config = config_module.RENDER
+        try:
+            new_config = config_module.get_quality_preset(config_module.QualityPreset.HIGH)
+            apply_render_config(new_config)
+
+            self.assertIs(config_module.RENDER, new_config)
+            self.assertIs(particles_module.RENDER, new_config)
+            self.assertIs(renderer_module.RENDER, new_config)
+        finally:
+            apply_render_config(original_config)
+
     def test_extended_run_stability(self) -> None:
         """Run engine for equivalent of 30 seconds to check for numerical stability."""
         engine = EnginePhysics()

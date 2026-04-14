@@ -127,6 +127,23 @@ class Particle:
 
 
 def spawn_particles(particles: list[Particle], state, engine, cylinder_y: float) -> None:
+    max_particles = getattr(RENDER, "max_particles", 0)
+    remaining_particles = max(0, max_particles - len(particles)) if max_particles > 0 else None
+    if remaining_particles == 0:
+        return
+
+    def reserve(count: int) -> int:
+        nonlocal remaining_particles
+        if count <= 0:
+            return 0
+        if remaining_particles is None:
+            return count
+        if remaining_particles <= 0:
+            return 0
+        allowed = min(count, remaining_particles)
+        remaining_particles -= allowed
+        return allowed
+
     lambda_value = max(0.7, min(2.5, engine.lambda_value))
     burn_phase = engine.burn_fraction if engine.combustion_active else 0.0
     burn_intensity = max(0.0, min(1.0, burn_phase))
@@ -155,7 +172,7 @@ def spawn_particles(particles: list[Particle], state, engine, cylinder_y: float)
 
     if state.dm_exh > 0 and random.random() < state.dm_exh * 0.002 * 40000:
         exh_y = cylinder_y + engine.x_exh * RENDER.scale + 6
-        for _ in range(random.randint(1, 3)):
+        for _ in range(reserve(random.randint(1, 3))):
             particles.append(
                 Particle(
                     x=RENDER.crank_x + engine.B / 2 * RENDER.scale,
@@ -171,7 +188,7 @@ def spawn_particles(particles: list[Particle], state, engine, cylinder_y: float)
             )
     elif state.dm_exh < 0 and random.random() < abs(state.dm_exh) * 0.002 * 40000:
         exh_y = cylinder_y + engine.x_exh * RENDER.scale + 6
-        for _ in range(random.randint(1, 3)):
+        for _ in range(reserve(random.randint(1, 3))):
             particles.append(
                 Particle(
                     x=RENDER.crank_x + engine.B / 2 * RENDER.scale + 40,
@@ -186,7 +203,7 @@ def spawn_particles(particles: list[Particle], state, engine, cylinder_y: float)
                 )
             )
     if engine.spark_active or burn_intensity > 0.02:
-        flame_count = 1 + int(12 * max(burn_intensity, pressure_intensity))
+        flame_count = reserve(1 + int(12 * max(burn_intensity, pressure_intensity)))
         # Guard against zero A_p (piston area)
         piston_area = max(engine.A_p, 1e-9)
         piston_y = cylinder_y + engine.V_c / piston_area * RENDER.scale + state.x * RENDER.scale
@@ -195,7 +212,7 @@ def spawn_particles(particles: list[Particle], state, engine, cylinder_y: float)
         
         # v2.1: Add sparks at ignition
         if engine.spark_active:
-            spark_count = 3 + int(5 * pressure_intensity)
+            spark_count = reserve(3 + int(5 * pressure_intensity))
             for _ in range(spark_count):
                 particles.append(
                     Particle(
@@ -236,7 +253,7 @@ def spawn_particles(particles: list[Particle], state, engine, cylinder_y: float)
             )
     if afterburn_intensity > 0.04 and state.dm_exh > 0:
         exh_y = cylinder_y + engine.x_exh * RENDER.scale + 10
-        pop_count = 1 + int(12 * afterburn_intensity)
+        pop_count = reserve(1 + int(12 * afterburn_intensity))
         for _ in range(pop_count):
             exhaust_color = random.choice((outer_exhaust, mid_exhaust, core_exhaust))
             particles.append(
@@ -256,7 +273,7 @@ def spawn_particles(particles: list[Particle], state, engine, cylinder_y: float)
             )
     if state.dm_tr > 0 and random.random() < state.dm_tr * 0.002 * 40000:
         crankcase_y = crankcase_top + random.uniform(20, 80)
-        for _ in range(random.randint(1, 4)):
+        for _ in range(reserve(random.randint(1, 4))):
             is_fuel = random.random() < 0.3
             base_color = (50, 255, 100) if is_fuel else (200, 220, 255)
             # v2.1: Apply temperature-based color
@@ -276,7 +293,7 @@ def spawn_particles(particles: list[Particle], state, engine, cylinder_y: float)
                 )
             )
     if state.dm_in > 0 and random.random() < state.dm_in * 0.002 * 20000:
-        for _ in range(random.randint(1, 3)):
+        for _ in range(reserve(random.randint(1, 3))):
             is_fuel = random.random() < 0.3
             base_color = (50, 255, 100) if is_fuel else (200, 220, 255)
             # v2.1: Apply temperature-based color
@@ -330,6 +347,9 @@ def update_particles(particles: list[Particle], state, engine, cylinder_y: float
     transfer_left = cyl_left - 54
 
     for particle in particles:
+        if not validate_particle(particle):
+            continue
+
         particle.update(engine.T_cyl)
         
         if particle.region == "intake":

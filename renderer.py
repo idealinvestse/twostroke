@@ -86,12 +86,22 @@ class EngineRenderer:
             self.animation_manager = AnimationManager()
         else:
             self.animation_manager = None
+
+        self._particle_surface = None
+        self._additive_surface = None
         
         # Initialize dashboard if enabled
         if RENDER.enable_dashboard:
             self.dashboard = create_default_dashboard(900, 660)
         else:
             self.dashboard = None
+
+    def _ensure_particle_surfaces(self, size: tuple[int, int]) -> None:
+        """Create reusable particle layer surfaces for the current render size."""
+        if self._particle_surface is None or self._particle_surface.get_size() != size:
+            self._particle_surface = pygame.Surface(size, pygame.SRCALPHA)
+        if self._additive_surface is None or self._additive_surface.get_size() != size:
+            self._additive_surface = pygame.Surface(size, pygame.SRCALPHA)
 
     def draw(self, screen: pygame.Surface, state, particles, pv_cyl_points: deque, pv_cr_points: deque, dt: float = 1.0) -> None:
         # Determine render target (HD or native)
@@ -233,44 +243,44 @@ class EngineRenderer:
         pygame.draw.line(render_surface, (180, 180, 200), (RENDER.crank_x, RENDER.crank_y), (crank_x, crank_y), 20)
         pygame.draw.circle(render_surface, (200, 50, 50), (int(crank_x), int(crank_y)), 8)
         pygame.draw.circle(render_surface, (50, 50, 50), (int(piston_pin[0]), int(piston_pin[1])), 6)
-        particle_surface = pygame.Surface(render_surface.get_size(), pygame.SRCALPHA)
-        # Separate particles into standard and additive blending layers
-        additive_particles = []
-        standard_particles = []
-        
-        for particle in particles:
-            if particle.life > 0:
-                if particle.region in ["cylinder", "exhaust"]:
-                    additive_particles.append(particle)
-                else:
-                    standard_particles.append(particle)
-                    
+        self._ensure_particle_surfaces(render_surface.get_size())
+        particle_surface = self._particle_surface
+        additive_surface = self._additive_surface
+        particle_surface.fill((0, 0, 0, 0))
+        additive_surface.fill((0, 0, 0, 0))
+
         # Define safe rendering bounds (motor area only)
         safe_left = RENDER.crank_x - 300
         safe_right = RENDER.crank_x + 300
         safe_top = self.cylinder_y - 100
         safe_bottom = RENDER.crank_y + 150
-        for particle in standard_particles:
+
+        has_standard_particles = False
+        has_additive_particles = False
+        for particle in particles:
+            if particle.life <= 0:
+                continue
             # Skip particles outside safe bounds (prevents rendering artifacts)
             if not (safe_left <= particle.x <= safe_right and safe_top <= particle.y <= safe_bottom):
                 continue
+
             color = (*particle.color, int(particle.life))
-            pygame.draw.circle(particle_surface, color, (int(particle.x), int(particle.y)), int(particle.size))
-            
-        render_surface.blit(particle_surface, (0, 0))
-        
-        if additive_particles:
-            additive_surface = pygame.Surface(render_surface.get_size(), pygame.SRCALPHA)
-            for particle in additive_particles:
-                # Skip particles outside safe bounds
-                if not (safe_left <= particle.x <= safe_right and safe_top <= particle.y <= safe_bottom):
-                    continue
-                color = (*particle.color, int(particle.life))
-                pygame.draw.circle(additive_surface, color, (int(particle.x), int(particle.y)), int(particle.size))
-                # Add dynamic glow to hot particles
-                if particle.life > 150:
+            particle_pos = (int(particle.x), int(particle.y))
+            particle_radius = max(1, int(particle.size))
+
+            if particle.region in ("cylinder", "exhaust"):
+                has_additive_particles = True
+                pygame.draw.circle(additive_surface, color, particle_pos, particle_radius)
+                if RENDER.enable_particle_glow and particle.life > 150:
                     glow_color = (*particle.color, int(particle.life * 0.3))
-                    pygame.draw.circle(additive_surface, glow_color, (int(particle.x), int(particle.y)), int(particle.size * 2.5))
+                    pygame.draw.circle(additive_surface, glow_color, particle_pos, max(particle_radius + 1, int(particle.size * 2.5)))
+            else:
+                has_standard_particles = True
+                pygame.draw.circle(particle_surface, color, particle_pos, particle_radius)
+
+        if has_standard_particles:
+            render_surface.blit(particle_surface, (0, 0))
+        if has_additive_particles:
             render_surface.blit(additive_surface, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
         afr = 1.0 / self.engine.fuel_ratio if self.engine.fuel_ratio > 0 else 0.0
         ignition_status = "PÅ" if self.engine.ignition_enabled else "AV"
@@ -357,10 +367,10 @@ class EngineRenderer:
         
         # Apply bloom post-processing
         if self.bloom_processor:
-            self.bloom_processor.process(render_surface)
+            render_surface = self.bloom_processor.process(render_surface)
         
         # Scale down from HD render target to screen
         if self.hd_surface:
-            pygame.transform.smoothscale(self.hd_surface, (WINDOW.width, WINDOW.height), screen)
+            pygame.transform.smoothscale(render_surface, (WINDOW.width, WINDOW.height), screen)
         elif render_surface != screen:
             screen.blit(render_surface, (0, 0))

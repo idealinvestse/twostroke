@@ -5,7 +5,7 @@
 config/name="2-Stroke Engine Simulation v3.0"
 config/description="Professional 3D visualization of 2-stroke engine thermodynamics"
 config/version="3.0.0"
-run/main_scene="res://scenes/main.tscn"
+run/main_scene="res://scenes/ui/main_menu.tscn"
 config/features=PackedStringArray("4.6", "Forward Plus")
 config/icon="res://assets/icon.png"
 
@@ -36,11 +36,17 @@ toggle_cutaway={"key":"C"}
 toggle_play={"key":"Space"}
 throttle_up={"key":"Up"}
 throttle_down={"key":"Down"}
+ui_pause={"key":"P"}
+ui_restart={"key":"R"}
+ui_menu={"key":"Escape"}
 
 [layer_names]
 3d_render/layer_1="Default"
 3d_render/layer_2="UI"
 3d_render/layer_3="Cutaway"
+
+[autoload]
+GameStateManager="res://scripts/game_state_manager.gd"
 
 [python]
 script/config={}

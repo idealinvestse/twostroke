@@ -23,6 +23,7 @@ from physics.constants import (
     PIPE_AMPLITUDE_DECAY,
     PIPE_MAX_SUCTION_PA,
     PIPE_MAX_PRESSURE_PA,
+    MAX_PIPE_AMPLITUDE,
 )
 from physics.thermodynamics import Thermodynamics
 from physics.utils import clamp, gaussian_falloff
@@ -302,6 +303,9 @@ class FlowCalculator:
         
         # Add energy from mass flow
         amplitude += dm_exh * dt * 60000.0 * resonance
+        
+        # Cap amplitude to physical limits (~0.8 bar peak)
+        amplitude = min(amplitude, MAX_PIPE_AMPLITUDE)
         
         # Clamp to realistic bounds
         suction = clamp(suction, -PIPE_MAX_SUCTION_PA, PIPE_MAX_PRESSURE_PA)

@@ -61,6 +61,13 @@ class EnginePhysicsTests(unittest.TestCase):
         engine.step(0.005)
         self.assertNotEqual(initial_theta, engine.theta)
 
+    def test_step_rejects_invalid_dt(self) -> None:
+        engine = EnginePhysics()
+        for invalid_dt in (0.0, -1e-3, float("nan")):
+            with self.subTest(dt=invalid_dt):
+                with self.assertRaises(ValueError):
+                    engine.step(invalid_dt)
+
     def test_snapshot_rpm_matches_omega(self) -> None:
         engine = EnginePhysics()
         snapshot = engine.snapshot()
@@ -68,6 +75,27 @@ class EnginePhysicsTests(unittest.TestCase):
         # Just verify it's in a reasonable range
         self.assertGreaterEqual(snapshot.rpm, 0.0)
         self.assertLess(snapshot.rpm, 20000.0)  # Sanity check for max RPM
+
+    def test_validate_state_rejects_invalid_pressure_and_pipe_state(self) -> None:
+        engine = EnginePhysics()
+        self.assertTrue(engine.validate_state())
+
+        engine.cylinders[0].p_cyl = float("inf")
+        self.assertFalse(engine.validate_state())
+
+        engine = EnginePhysics()
+        engine.p_pipe = float("nan")
+        self.assertFalse(engine.validate_state())
+
+    def test_snapshot_and_step_reject_empty_cylinder_list(self) -> None:
+        engine = EnginePhysics()
+        engine.cylinders = []
+
+        with self.assertRaises(RuntimeError):
+            engine.snapshot()
+
+        with self.assertRaises(RuntimeError):
+            engine.step(0.005)
 
     def test_throttle_changes_engine_speed(self) -> None:
         """Test throttle with 50cc engine - verify engine runs at different throttle openings."""

@@ -2,20 +2,25 @@
 
 Professional 3D visualization of 2-stroke engine thermodynamics with Vulkan rendering.
 
+This is the Godot 4.x-based 3D visualization component of the Two-Stroke Engine Simulation. It connects to a Python physics server via TCP socket for real-time thermodynamic data.
+
 ## Requirements
 
-- Windows 10/11
-- Godot 4.6+ (Vulkan-compatible GPU)
+- Windows 10/11 (Linux/Mac untested but should work)
+- Godot 4.6+ (Vulkan-compatible GPU required)
 - Python 3.11+ (for physics server)
+- TCP port 9999 available
 
 ## Quick Start
 
 1. **Install Godot 4.6.2:**
    - Download from https://godotengine.org/download
    - Place `Godot_v4.6.2-stable_win64.exe` in this directory
+   - Or modify `launch.bat` to point to your Godot installation
 
 2. **Install Python dependencies:**
    ```bash
+   cd ..
    pip install -r requirements.txt
    ```
 
@@ -23,8 +28,15 @@ Professional 3D visualization of 2-stroke engine thermodynamics with Vulkan rend
    ```bash
    launch.bat
    ```
+   
+   This will:
+   - Start the physics server (Python)
+   - Launch Godot with the 3D scene
+   - Connect via TCP on port 9999
 
 ## Architecture
+
+The Godot engine acts as a visualization client to the Python physics server:
 
 ```
 ┌─────────────────┐     TCP Socket      ┌─────────────────┐
@@ -37,6 +49,44 @@ Professional 3D visualization of 2-stroke engine thermodynamics with Vulkan rend
 │ • PV diagrams   │                     │ • UI/Gauges     │
 └─────────────────┘                     └─────────────────┘
         600 Hz                                   60 FPS
+```
+
+### Communication Protocol
+
+**Protocol**: TCP with 4-byte big-endian length prefix + JSON payload
+
+**Port**: 9999 (localhost)
+
+**Rate**: 60 Hz (one state update per frame)
+
+**Python → Godot (State updates):**
+```json
+{
+  "theta": 0.785,
+  "rpm": 4500.0,
+  "x": 0.015,
+  "p_cyl": 2500000.0,
+  "T_cyl": 673.0,
+  "omega": 471.0,
+  "combustion_active": true,
+  "spark_active": false,
+  "reed_opening": 0.75,
+  "a_exh": 0.0004,
+  "a_tr": 0.0003,
+  "dm_exh": -0.001,
+  "dm_tr": 0.002
+}
+```
+
+**Godot → Python (Commands):**
+```
+THROTTLE:0.75
+IGNITION_ANGLE:22.0
+FUEL_RATIO:0.05
+IDLE_TRIM:1.0
+ENABLE_IGNITION:true
+KILL_SWITCH:false
+STARTER_MOTOR:true
 ```
 
 ## Project Structure

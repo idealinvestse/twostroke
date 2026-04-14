@@ -517,18 +517,24 @@ def validate_mass_balance(v: PhysicsValidator) -> None:
     engine.throttle = 0.5
 
     initial_total = engine.m_cyl + engine.m_cr + engine.fuel_film_cyl + engine.fuel_film_cr
-
-    for _ in range(500):
+    
+    # Track mass drift over time
+    mass_samples = []
+    
+    for i in range(500):
         engine.step(1/600)
+        if i % 100 == 0:
+            current_total = engine.m_cyl + engine.m_cr + engine.fuel_film_cyl + engine.fuel_film_cr
+            mass_samples.append(current_total)
 
     final_total = engine.m_cyl + engine.m_cr + engine.fuel_film_cyl + engine.fuel_film_cr
 
     # Massan kan ändras pga intag/avgas, men ska inte vara extremt
-    mass_change = abs(final_total - initial_total) / initial_total
+    mass_change = abs(final_total - initial_total) / max(initial_total, 1e-9)
 
     v.test(
-        "Massbalans - inte extrem förändring",
-        mass_change < 5.0,  # Mindre än 500% förändring
+        "Massbalans - rimlig förändring (<20%)",
+        mass_change < 0.20,  # Minskad från 500% till 20% för striktare validering
         f"Massförändring: {mass_change*100:.1f}%",
         {"initial": initial_total, "final": final_total}
     )
@@ -537,6 +543,15 @@ def validate_mass_balance(v: PhysicsValidator) -> None:
         final_total > 0,
         f"Total massa = {final_total:.6f} kg"
     )
+    
+    # Check for monotonic drift
+    if len(mass_samples) >= 3:
+        drift_trend = mass_samples[-1] - mass_samples[0]
+        v.test(
+            "Massbalans - ingen monotonic drift",
+            abs(drift_trend) / max(initial_total, 1e-9) < 0.15,
+            f"Drift över simulering: {drift_trend*100:.2f}%"
+        )
 
     # rescale_components funktion
     result = EnginePhysics.rescale_components(1, 2, 3, target_total=10)

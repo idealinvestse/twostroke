@@ -6,14 +6,15 @@ for a complete 2-stroke engine simulation.
 
 import math
 from dataclasses import dataclass
+from typing import Optional
 
 from physics.constants import (
     R_GAS,
     P_ATM,
     T_ATM,
-    C_V,
     C_P,
     MIN_PRESSURE,
+    MAX_CYLINDER_PRESSURE,
     MIN_CRANKCASE_PRESSURE,
     MAX_CRANKCASE_PRESSURE,
     EPSILON_MASS,
@@ -39,8 +40,9 @@ from physics.constants import (
 )
 from physics.utils import clamp
 from physics.kinematics import SliderCrankKinematics
-from physics.thermodynamics import Thermodynamics
-from physics.flows import FlowCalculator, ReedValveState, ExhaustPipeState
+from physics.thermodynamics import Thermodynamics, gas_properties
+from physics.flows import FlowCalculator, ReedValveState, ExhaustPipeState, ScavengingCalculator, ScavengingModel
+from physics.friction import FrictionModel, FrictionBreakdown
 
 
 from physics.cylinder import Cylinder, CylinderState
@@ -89,6 +91,9 @@ class EngineSnapshot:
     
     # Multi-cylinder data
     cylinders: list[CylinderState]
+    
+    # Friction breakdown
+    friction_breakdown: Optional[FrictionBreakdown] = None
 
 
 
@@ -103,6 +108,9 @@ class EnginePhysics:
     """
     
     def __init__(self, num_cylinders: int = 1) -> None:
+        if num_cylinders < 1:
+            raise ValueError("EnginePhysics requires at least one cylinder")
+
         # Engine geometry (more realistic 50cc specs)
         self.B = BORE_M
         self.R = HALF_STROKE_M
@@ -200,6 +208,21 @@ class EnginePhysics:
         self._kinematics = SliderCrankKinematics()
         self._flow_calc = FlowCalculator()
         self._thermo = Thermodynamics()
+        self._friction_model = FrictionModel(
+            piston_mass=0.15, bore=BORE_M, stroke=2*HALF_STROKE_M, con_rod_length=CON_ROD_M
+        )
+        self._friction_scaling = 0.15  # Scale FrictionModel to match original behavior
+        self._scavenging_calc = ScavengingCalculator(
+            model=ScavengingModel.COMBINED,
+            short_circuit_fraction=0.15,
+            displacement_efficiency=0.7
+        )
+        
+        # Friction state
+        self._friction_breakdown = None  # type: FrictionBreakdown | None
+        
+        # Sub-stepping for better angular resolution
+        self.sub_steps = 4  # Number of sub-steps per timestep (1-8)
         
         # For debug
         self.last_d_q_comb = 0.0
@@ -235,12 +258,55 @@ class EnginePhysics:
         self.fuel_evap_rate_cr = 1.0    # 0.5-2.0, vevhus-förångning
         self.fuel_evap_rate_cyl = 1.0   # 0.5-2.0, cylinder-förångning
         self.reed_stiffness = 1200.0    # 800-2000, vevhusventil-styvhet
-        self.idle_circuit_strength = 1.0 # 0.5-1.5
+        # idle_circuit_strength is calculated dynamically by _idle_circuit_strength() method
         
         # Mekaniskt
         self.inertia_multiplier = 1.0   # 0.6-1.5, tröghet
         self.friction_factor = 1.0      # 0.7-1.3, friktionsfaktor
         self.mechanical_efficiency = 0.85  # 0.75-0.92
+        self.con_rod_mass = 0.12  # kg, connecting rod mass for oscillating inertia
+        
+        # Apply trimming parameters to derived values
+        self._apply_trimming_parameters()
+    
+    def _apply_trimming_parameters(self) -> None:
+        """Apply trimming parameters to derived geometry and physics values."""
+        # Apply geometry multipliers
+        self.R = HALF_STROKE_M * self.stroke_multiplier  # Crank radius
+        self.L = self.rod_length  # Connecting rod length
+        self.B = BORE_M * self.bore_multiplier  # Bore diameter
+        self.A_p = math.pi * (self.B / 2) ** 2  # Piston area
+        self.V_d = self.A_p * 2 * self.R  # Displacement
+        
+        # Calculate clearance volume from compression ratio
+        # CR = (V_d + V_c) / V_c => V_c = V_d / (CR - 1)
+        if self.compression_ratio > 1.0:
+            self.V_c = self.V_d / (self.compression_ratio - 1.0)
+        else:
+            self.V_c = CLEARANCE_VOLUME_M3
+        
+        # Apply port timing dimensions
+        self.x_exh = self.exhaust_port_height
+        self.x_tr = self.transfer_port_height
+        self.w_exh = self.exhaust_port_width
+        self.w_tr = self.transfer_port_width
+        
+        # Update kinematics calculator with modified geometry
+        self._kinematics = SliderCrankKinematics()
+        # Override kinematics geometry parameters
+        self._kinematics.R = self.R
+        self._kinematics.L = self.L
+        self._kinematics.A_p = self.A_p
+        self._kinematics.V_c = self.V_c
+        
+        # Apply inertia multiplier with connecting rod oscillating inertia
+        # Base inertia from crankshaft, piston, and oscillating rod
+        base_inertia = 0.008 * self.num_cylinders
+        # Connecting rod equivalent inertia (approximation)
+        # I_rod ≈ m_rod * R^2 * (0.5 + 0.5*(R/L)^2)
+        lambda_ratio = self.R / max(self.L, 1e-9)
+        rod_inertia = self.con_rod_mass * self.num_cylinders * (self.R ** 2) * (0.5 + 0.5 * lambda_ratio ** 2)
+        self.I_engine = (base_inertia + rod_inertia) * self.inertia_multiplier
     
     @property
     def T_cyl(self) -> float:
@@ -301,6 +367,8 @@ class EnginePhysics:
             self.theta, self.omega, self.sim_time,
             self.T_cr,
             self.m_air_cr, self.m_fuel_cr, self.m_residual_cr,
+            self.p_pipe, self.pipe_phase, self.pipe_amplitude,
+            self.rpm_ema, self.torque_ema, self.power_ema,
         ]
         
         for value in critical_values:
@@ -310,11 +378,16 @@ class EnginePhysics:
         # Check cylinders
         for cyl in self.cylinders:
             cyl_values = [
+                cyl.p_cyl,
                 cyl.T_cyl,
                 cyl.m_air, cyl.m_fuel, cyl.m_burned,
                 cyl.burn_fraction, cyl.lambda_value
             ]
             if any(not math.isfinite(v) for v in cyl_values):
+                return False
+            if not (MIN_PRESSURE <= cyl.p_cyl <= MAX_CYLINDER_PRESSURE):
+                return False
+            if not (0.0 <= cyl.burn_fraction <= 1.0):
                 return False
             if any(m < -1e-9 for m in [cyl.m_air, cyl.m_fuel, cyl.m_burned]):
                 return False
@@ -333,6 +406,10 @@ class EnginePhysics:
         if not (T_ATM <= self.T_cr <= 1000.0):
             return False
         
+        # Check exhaust pipe pressure bounds
+        if not (MIN_PRESSURE <= self.p_pipe <= 1000000.0):
+            return False
+        
         return self.omega >= 0
     
     def _calculate_crankcase_pressure(self, v_cr: float) -> float:
@@ -343,10 +420,16 @@ class EnginePhysics:
         p_cr = clamp(p_cr, MIN_CRANKCASE_PRESSURE, MAX_CRANKCASE_PRESSURE)
         return p_cr
     
-    def step(self, dt: float, starter_active: bool = False) -> EngineSnapshot:
+    def _step_core(self, dt: float, starter_active: bool = False) -> EngineSnapshot:
         """Execute one physics timestep with multi-cylinder support."""
+        if not math.isfinite(dt) or dt <= 0.0:
+            raise ValueError("dt must be a positive finite value")
+
         if dt > 0.01:
             dt = 0.01
+
+        if not self.cylinders:
+            raise RuntimeError("EnginePhysics has no cylinders to simulate")
         
         self.sim_time += dt
         throttle_factor = self._throttle_flow_factor()
@@ -431,6 +514,9 @@ class EnginePhysics:
             dm_air_tr = 0.0
             dm_fuel_tr = 0.0
             dm_burned_tr = 0.0
+            transferred_air = 0.0
+            transferred_fuel = 0.0
+            transferred_burned = 0.0
             
             if dm_tr > 0:
                 transfer_mass = min(dm_tr * dt, self.m_air_cr + self.m_fuel_cr + self.m_residual_cr)
@@ -440,6 +526,17 @@ class EnginePhysics:
                 if cr_fa_ratio > 0.3:
                     transfer_mass *= 0.1
                 
+                # Short-circuit loss during port overlap
+                # When both exhaust and transfer ports are open, fresh charge can exit directly
+                short_circuit_loss = 0.0
+                if ports.exhaust > 0 and ports.transfer > 0:
+                    # Short-circuit fraction depends on relative port areas
+                    overlap_fraction = min(ports.exhaust, ports.transfer) / max(ports.exhaust, ports.transfer, 1e-9)
+                    # Base short-circuit loss 15%, increased by overlap
+                    short_circuit_fraction = 0.15 + 0.10 * overlap_fraction
+                    short_circuit_loss = transfer_mass * short_circuit_fraction
+                    transfer_mass -= short_circuit_loss
+                
                 transferred_air = transfer_mass * self.m_air_cr / crankcase_total
                 transferred_fuel = transfer_mass * self.m_fuel_cr / crankcase_total
                 transferred_burned = transfer_mass * self.m_residual_cr / crankcase_total
@@ -448,10 +545,11 @@ class EnginePhysics:
                 dm_fuel_tr = transferred_fuel / max(dt, 1e-6)
                 dm_burned_tr = transferred_burned / max(dt, 1e-6)
                 
-                self.m_air_cr -= transferred_air
-                self.m_fuel_cr -= transferred_fuel
+                # Account for short-circuit loss in crankcase mass balance
+                self.m_air_cr -= transferred_air + (short_circuit_loss * self.m_air_cr / crankcase_total)
+                self.m_fuel_cr -= transferred_fuel + (short_circuit_loss * self.m_fuel_cr / crankcase_total)
                 self.m_residual_cr -= transferred_burned
-                total_dm_out_cr += (transferred_air + transferred_fuel + transferred_burned) / dt
+                total_dm_out_cr += (transferred_air + transferred_fuel + transferred_burned + short_circuit_loss) / dt
                 
                 cyl.add_transfer_with_fuel_film(transferred_air, transferred_fuel, transferred_burned, throttle_factor)
             
@@ -459,6 +557,10 @@ class EnginePhysics:
             dm_air_exh = 0.0
             dm_fuel_exh = 0.0
             dm_burned_exh = 0.0
+            exhausted_air = 0.0
+            exhausted_fuel = 0.0
+            exhausted_burned = 0.0
+            backflow_mass = 0.0
             if dm_exh >= 0:
                 exhaust_mass = min(dm_exh * dt, cyl.m_air + cyl.m_fuel + cyl.m_burned)
                 cyl_total = max(EPSILON_MASS, cyl.m_air + cyl.m_fuel + cyl.m_burned)
@@ -478,8 +580,11 @@ class EnginePhysics:
                 # Backflow from exhaust pipe
                 backflow_mass = -dm_exh * dt if not self.fuel_cutoff else 0.0
                 if backflow_mass > 0:
-                    # Assume backflow is mostly burned gas at lower temperature
-                    cyl.m_burned += backflow_mass
+                    # Backflow is a mixture: mostly burned gas with some unburned charge
+                    # Typical: 85% burned, 15% air/fuel (from short-circuiting in pipe)
+                    cyl.m_burned += backflow_mass * 0.85
+                    cyl.m_air += backflow_mass * 0.1275  # 15% * 0.85 air fraction
+                    cyl.m_fuel += backflow_mass * 0.0225  # 15% * 0.15 fuel fraction
             
             # Minimum mass guard (prevent cylinder from going below minimum pressure)
             cyl_total = cyl.m_air + cyl.m_fuel + cyl.m_burned
@@ -500,17 +605,28 @@ class EnginePhysics:
                 self.ignition_angle_deg, self.ignition_enabled, 
                 self.fuel_cutoff, throttle_factor, self.omega)
             
-            # Energy balance
+            # Energy balance with mass-change internal energy correction
+            # dU = dQ_comb + h_in*dm_in - p*dV + T*C_V*dm_net
+            # where dm_net accounts for internal energy carried by mass change
             d_v_cyl = self.A_p * kin.dx_dtheta * self.omega * dt
             dm_in_cyl = (transferred_air + transferred_fuel + transferred_burned) if dm_tr > 0 else 0.0
+            dm_out_cyl = (exhausted_air + exhausted_fuel + exhausted_burned) if dm_exh >= 0 else 0.0
+            dm_backflow_cyl = backflow_mass if dm_exh < 0 and not self.fuel_cutoff else 0.0
+            dm_net_cyl = dm_in_cyl - dm_out_cyl + dm_backflow_cyl
             
-            h_in = self.T_cr * C_P * dm_in_cyl
-            d_q = heat + h_in - p_cyl * d_v_cyl
+            # Temperature-dependent gas properties
+            cyl_burn_frac = cyl.m_burned / max(EPSILON_MASS, cyl.m_air + cyl.m_fuel + cyl.m_burned)
+            cyl_gas = gas_properties(cyl.T_cyl, cyl_burn_frac)
+            cr_gas = gas_properties(self.T_cr, 0.0)  # Crankcase is mostly fresh charge
+            
+            h_in = self.T_cr * cr_gas.c_p * dm_in_cyl
+            d_q = heat + h_in - p_cyl * d_v_cyl + cyl.T_cyl * cyl_gas.c_v * dm_net_cyl
             m_avg = max(EPSILON_MASS, cyl.m_air + cyl.m_fuel + cyl.m_burned)
-            cyl.T_cyl = max(T_ATM, cyl.T_cyl + d_q / (m_avg * C_V))
+            cyl.T_cyl = max(T_ATM, cyl.T_cyl + d_q / (m_avg * cyl_gas.c_v))
             
-            # Cooling
-            cyl.apply_cooling(dt)
+            # Cooling (Woschni heat transfer)
+            v_piston = kin.dx_dtheta * self.omega  # Piston velocity (m/s)
+            cyl.apply_cooling(dt, p_cyl, v_piston, cyl.combustion_active)
             cyl.T_cyl = clamp(cyl.T_cyl, T_ATM, 3000.0)
             
             # Torque contribution
@@ -539,12 +655,16 @@ class EnginePhysics:
         d_v_cr = -sum_d_v_cyl
         
         dm_in_total = dm_air_in + dm_fuel_in
+        dm_net_cr = (dm_in_total - total_dm_out_cr) * dt
         
-        h_in_cr = T_ATM * dm_in_total * dt * C_P
-        h_out_cr = self.T_cr * C_P * total_dm_out_cr * dt
-        d_q_cr = h_in_cr - h_out_cr - p_cr * d_v_cr
+        # Crankcase gas properties (mostly fresh charge)
+        cr_gas = gas_properties(self.T_cr, 0.0)
+        
+        h_in_cr = T_ATM * C_P * dm_in_total * dt  # Intake at atmospheric conditions
+        h_out_cr = self.T_cr * cr_gas.c_p * total_dm_out_cr * dt
+        d_q_cr = h_in_cr - h_out_cr - p_cr * d_v_cr + self.T_cr * cr_gas.c_v * dm_net_cr
         m_avg_cr = max(EPSILON_MASS, self.m_air_cr + self.m_fuel_cr + self.m_residual_cr)
-        self.T_cr = max(T_ATM, self.T_cr + d_q_cr / (m_avg_cr * C_V))
+        self.T_cr = max(T_ATM, self.T_cr + d_q_cr / (m_avg_cr * cr_gas.c_v))
         self.T_cr -= (self.T_cr - T_WALL_CRANKCASE) * HEAT_TRANSFER_COEF * 0.03 * dt
         self.T_cr = clamp(self.T_cr, T_ATM, 500.0)
         
@@ -566,10 +686,20 @@ class EnginePhysics:
         self.cycle_work += net_torque * self.omega * dt
         
         starter_torque = self.starter_torque if (starter_active and self.omega < 100.0) else 0.0
-        pumping_drag = self.omega * 0.008 + 0.000008 * self.omega * self.omega + (1.0 - self.throttle) * 2.0
+        
+        # Compute friction using FrictionModel (simple model for backward compatibility)
+        # Using get_simple_friction to maintain existing behavior while integrating the class
+        friction_torque = self._friction_model.get_simple_friction(self.omega) * self.num_cylinders
+        # Add throttle-dependent pumping loss (not in FrictionModel simple version)
+        throttle_pump_loss = (1.0 - self.throttle) * 2.0 * self.num_cylinders
+        friction_torque += throttle_pump_loss
+        # Apply friction_factor tuning multiplier
+        friction_torque *= self.friction_factor
+        
+        # Engine brake (fuel cutoff)
         extra_brake = 8.0 if self.fuel_cutoff and not starter_active else 0.0
         
-        final_torque = net_torque + starter_torque - self.friction - pumping_drag - extra_brake
+        final_torque = net_torque + starter_torque - friction_torque - extra_brake
         self.omega += (final_torque / max(self.I_engine, 1e-6)) * dt
         
         if self.omega < 40.0 and self.ignition_enabled and not self.fuel_cutoff:
@@ -584,7 +714,7 @@ class EnginePhysics:
         self.rpm_ema = self.rpm_ema * (1 - RPM_EMA_ALPHA) + rpm * RPM_EMA_ALPHA
         
         if self.theta < self.last_theta_cross:
-            self.last_cycle_torque = self.cycle_work / (2 * math.pi) - self.friction - pumping_drag
+            self.last_cycle_torque = self.cycle_work / (2 * math.pi) - friction_torque
             self.torque_ema = self.torque_ema * (1 - TORQUE_EMA_ALPHA) + self.last_cycle_torque * TORQUE_EMA_ALPHA
             power_kw = max(0.0, (self.torque_ema * self.omega) / 1000.0 * MECHANICAL_EFFICIENCY)
             self.power_ema = self.power_ema * (1 - POWER_EMA_ALPHA) + power_kw * POWER_EMA_ALPHA
@@ -595,9 +725,12 @@ class EnginePhysics:
             self.cycle_air_tr = 0.0
         
         self.last_theta_cross = self.theta
-        
+
         if not self.validate_state():
             raise RuntimeError("Physics state validation failed")
+        
+        if primary_cyl_state is None or primary_ports is None:
+            raise RuntimeError("Primary cylinder state was not initialized")
         
         # 8. Create snapshot with new multi-cylinder format
         return EngineSnapshot(
@@ -630,11 +763,37 @@ class EnginePhysics:
             dm_burned_exh=self.last_dm_burned_exh,
             volumetric_efficiency=self.volumetric_efficiency,
             trapping_efficiency=self.trapping_efficiency,
+            friction_breakdown=self._friction_breakdown,
             cylinders=all_cyl_states
         )
     
+    def step(self, dt: float, starter_active: bool = False) -> EngineSnapshot:
+        """Execute one physics timestep with sub-stepping for better angular resolution.
+        
+        Divides dt into multiple sub-steps to improve accuracy at high RPM.
+        """
+        if not math.isfinite(dt) or dt <= 0.0:
+            raise ValueError("dt must be a positive finite value")
+        
+        # Cap max timestep
+        if dt > 0.01:
+            dt = 0.01
+        
+        # Divide into sub-steps
+        sub_dt = dt / self.sub_steps
+        
+        # Run all sub-steps (only return snapshot from last one)
+        snapshot = None
+        for _ in range(self.sub_steps):
+            snapshot = self._step_core(sub_dt, starter_active)
+        
+        return snapshot
+    
     def snapshot(self) -> EngineSnapshot:
         """Return current state snapshot without advancing simulation."""
+        if not self.cylinders:
+            raise RuntimeError("EnginePhysics has no cylinders to snapshot")
+
         # Calculate total crankcase volume
         total_v_cr = self.V_cr_min
         all_cyl_states = []
@@ -656,6 +815,9 @@ class EnginePhysics:
                 )
         
         p_cr = self._calculate_crankcase_pressure(total_v_cr)
+
+        if primary_cyl_state is None or primary_ports is None:
+            raise RuntimeError("Primary cylinder state was not initialized")
         
         intake_cond = self._flow_calc.calculate_intake_conditions(
             p_cr, self.throttle, self.idle_fuel_trim
@@ -691,5 +853,6 @@ class EnginePhysics:
             dm_burned_exh=self.last_dm_burned_exh,
             volumetric_efficiency=self.volumetric_efficiency,
             trapping_efficiency=self.trapping_efficiency,
+            friction_breakdown=self._friction_breakdown,
             cylinders=all_cyl_states
         )

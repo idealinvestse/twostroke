@@ -225,9 +225,20 @@ class CombustionModel:
                 available_fuel=0.0,
             ), 0.0
         
-        # Wiebe function for burn rate
+        # Two-phase Wiebe function for burn rate
+        # Phase 1: Premixed (rapid initial burn)
+        # Phase 2: Diffusion (slower trailing burn)
         phase = min(1.0, dtheta / max(combustion.duration, 1e-6))
-        new_fraction = 1.0 - math.exp(-5.8 * (phase ** 3.0))
+        
+        # Premixed phase: a1=6.0, m1=1.0 (fast)
+        x_b1 = 1.0 - math.exp(-6.0 * (phase ** 2.0))
+        # Diffusion phase: a2=3.0, m2=0.5 (slower)
+        x_b2 = 1.0 - math.exp(-3.0 * (phase ** 1.5))
+        
+        # Blend based on lambda: rich mixtures have more premixed, lean more diffusion
+        # α = 0.6 for stoichiometric, higher for rich, lower for lean
+        alpha = clamp01(0.6 + 0.2 * (1.0 - combustion.lambda_value))
+        new_fraction = alpha * x_b1 + (1.0 - alpha) * x_b2
         
         delta_fraction = max(0.0, new_fraction - combustion.burn_fraction)
         

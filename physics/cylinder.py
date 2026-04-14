@@ -8,8 +8,9 @@ from physics.constants import (
     R_GAS, P_ATM, T_ATM,
     MIN_PRESSURE, MAX_CYLINDER_PRESSURE,
     EPSILON_VOLUME,
-    T_WALL_CYLINDER, HEAT_TRANSFER_COEF,
-    FUEL_LHV, STOICH_AFR
+    T_WALL_CYLINDER,
+    FUEL_LHV, STOICH_AFR,
+    BORE_M,
 )
 from physics.utils import clamp
 from physics.combustion import CombustionModel
@@ -141,11 +142,61 @@ class Cylinder:
                 
         return heat_released
 
-    def apply_cooling(self, dt: float) -> None:
-        """Apply convective cooling to cylinder walls."""
-        # Simple convective model for now, Woschni will replace this
-        dQ_cool = (self.T_cyl - T_WALL_CYLINDER) * HEAT_TRANSFER_COEF * 0.1 * dt
-        self.T_cyl -= dQ_cool
+    def apply_cooling(self, dt: float, p_cyl: float = P_ATM,
+                       v_piston: float = 0.0, combustion_active: bool = False) -> None:
+        """Apply Woschni convective heat transfer to cylinder walls.
+        
+        Uses the Woschni correlation:
+        h = 3.26 * B^(-0.2) * p^(0.8) * T^(-0.55) * w^(0.8)
+        
+        where w (gas velocity) depends on the phase:
+        - Gas exchange: w = 6*(1 + 0.5*|v_piston|/v_bar)
+        - Compression: w = 2.28 + 0.308*v_piston/v_bar
+        - Combustion/expansion: w = 2.28 + 0.308*v_piston/v_bar + f*(p-p_m)/(p_m)
+        
+        Args:
+            dt: Timestep (s)
+            p_cyl: Cylinder pressure (Pa)
+            v_piston: Piston velocity (m/s)
+            combustion_active: Whether combustion is active
+        """
+        B = BORE_M  # Bore diameter (m)
+        T = max(T_ATM, self.T_cyl)
+        p = max(P_ATM, p_cyl)
+        
+        # Mean piston speed reference (typical 50cc at 8000 RPM)
+        v_bar = 8.0  # m/s reference speed
+        
+        # Gas velocity term depends on engine phase
+        if combustion_active:
+            # Combustion/expansion phase: includes pressure-rise driven velocity
+            w = 2.28 + 0.308 * abs(v_piston) / v_bar + 3.0 * 0.003 * v_bar
+        else:
+            # Gas exchange / compression phase
+            w = 6.0 * (1.0 + 0.5 * abs(v_piston) / v_bar)
+        
+        w = max(w, 0.1)  # Minimum gas velocity
+        
+        # Woschni heat transfer coefficient (scaled for small 50cc engine)
+        # Original Woschni is for automotive-scale; small engines have higher
+        # surface-to-volume ratio but lower absolute heat transfer
+        h_woschni = 3.26 * (B ** (-0.2)) * (p ** 0.8) * (T ** (-0.55)) * (w ** 0.8)
+        h_woschni *= 0.15  # Scale factor for 50cc 2-stroke (reduced from automotive)
+        
+        # Heat transfer area: cylinder head + piston crown (bore area only)
+        # For small 2-stroke, liner area is partially covered by ports
+        A_heat = math.pi * B * B / 4.0 * 2.0  # Head + piston crown
+        
+        # Heat loss (positive = heat leaving gas)
+        dQ_cool = h_woschni * A_heat * (T - T_WALL_CYLINDER) * dt
+        
+        # Convert to temperature change
+        m_total = max(1e-9, self.m_air + self.m_fuel + self.m_burned)
+        from physics.thermodynamics import gas_properties
+        burn_frac = self.m_burned / m_total
+        gas = gas_properties(self.T_cyl, burn_frac)
+        dT_cool = dQ_cool / (m_total * gas.c_v)
+        self.T_cyl -= dT_cool
     
     def add_transfer_with_fuel_film(self, transferred_air: float, transferred_fuel: float, 
                                     transferred_burned: float, throttle_factor: float) -> None:

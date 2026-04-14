@@ -1,11 +1,19 @@
 """Unit tests for particles, utils, config, and renderer utilities."""
 import math
 import unittest
+from unittest.mock import patch
 
-from particles import Particle, combustion_particle_colors, PISTON_VEL_SCALE
+import pygame
+
+import config as config_module
+from app import apply_render_config
+from particles import Particle, combustion_particle_colors, PISTON_VEL_SCALE, update_particles, validate_particle
+from particles import spawn_particles
 from physics.utils import clamp01, clamp, rescale_components, angle_diff, gaussian_falloff, is_finite, safe_divide
 from config import QualityPreset, get_quality_preset, RenderConfig, WindowConfig
 from renderer import combustion_palette, color_rgb
+from physics import EnginePhysics
+from rendering.bloom import BloomProcessor
 
 
 class ParticleClassTests(unittest.TestCase):
@@ -91,6 +99,68 @@ class ParticleClassTests(unittest.TestCase):
             fuel.update(500.0)
         # Fuel may or may not convert depending on evaporation rate
         self.assertIn(fuel.p_type, ["fuel", "vapor"])
+
+
+class ParticleUpdateIntegrationTests(unittest.TestCase):
+    def test_update_particles_skips_invalid_particles(self) -> None:
+        engine = EnginePhysics()
+        state = engine.snapshot()
+        valid_particle = Particle(x=50.0, y=50.0, color=(255, 0, 0), vx=1.0, vy=1.0)
+        invalid_particle = Particle(x=float("nan"), y=50.0, color=(255, 0, 0), vx=1.0, vy=1.0)
+
+        updated = update_particles([invalid_particle, valid_particle], state, engine, 0.0)
+
+        self.assertEqual(len(updated), 1)
+        self.assertTrue(validate_particle(updated[0]))
+
+
+class ParticleSpawnPerformanceTests(unittest.TestCase):
+    def test_spawn_particles_respects_render_cap(self) -> None:
+        original_config = config_module.RENDER
+        try:
+            apply_render_config(config_module.RenderConfig(max_particles=5))
+            engine = EnginePhysics()
+            engine.cylinders[0].spark_active = True
+            engine.cylinders[0].combustion_active = True
+            engine.cylinders[0].burn_fraction = 1.0
+            engine.cylinders[0].lambda_value = 0.8
+            engine.cylinders[0].T_cyl = 1600.0
+            state = engine.snapshot()
+            state.dm_exh = 1.0
+            state.dm_tr = 1.0
+            state.dm_in = 1.0
+
+            particles: list[Particle] = []
+            with patch("particles.random.random", return_value=0.0), patch("particles.random.randint", return_value=3):
+                spawn_particles(particles, state, engine, 0.0)
+
+            self.assertLessEqual(len(particles), 5)
+        finally:
+            apply_render_config(original_config)
+
+
+class BloomPerformanceTests(unittest.TestCase):
+    def test_bloom_uses_smaller_working_surface(self) -> None:
+        processor = BloomProcessor((120, 80), quality=1)
+        self.assertLess(processor.work_width, 120)
+        self.assertLess(processor.work_height, 80)
+
+        surface = pygame.Surface((120, 80), pygame.SRCALPHA)
+        surface.fill((0, 0, 0, 255))
+        pygame.draw.circle(surface, (255, 255, 255), (60, 40), 10)
+
+        result = processor.process(surface)
+        self.assertEqual(result.get_size(), (120, 80))
+
+    def test_bloom_skips_dark_frames(self) -> None:
+        processor = BloomProcessor((64, 64), quality=2)
+        surface = pygame.Surface((64, 64), pygame.SRCALPHA)
+        surface.fill((12, 18, 24, 255))
+
+        result = processor.process(surface)
+
+        self.assertEqual(result.get_at((0, 0)), surface.get_at((0, 0)))
+        self.assertEqual(result.get_at((32, 32)), surface.get_at((32, 32)))
 
 
 class CombustionParticleColorsTests(unittest.TestCase):
@@ -232,11 +302,13 @@ class ConfigQualityPresetTests(unittest.TestCase):
         self.assertFalse(config.enable_hd_render)
         self.assertFalse(config.enable_bloom)
         self.assertFalse(config.enable_animations)
+        self.assertFalse(config.enable_particle_glow)
 
     def test_low_preset(self) -> None:
         config = get_quality_preset(QualityPreset.LOW)
         self.assertEqual(config.quality_preset, QualityPreset.LOW)
         self.assertFalse(config.enable_hd_render)
+        self.assertFalse(config.enable_particle_glow)
 
     def test_medium_preset(self) -> None:
         config = get_quality_preset(QualityPreset.MEDIUM)
@@ -249,12 +321,16 @@ class ConfigQualityPresetTests(unittest.TestCase):
         self.assertEqual(config.quality_preset, QualityPreset.HIGH)
         self.assertTrue(config.enable_hd_render)
         self.assertTrue(config.enable_bloom)
+        self.assertTrue(config.enable_particle_glow)
+        self.assertEqual(config.bloom_quality, 2)
 
     def test_ultra_preset(self) -> None:
         config = get_quality_preset(QualityPreset.ULTRA)
         self.assertEqual(config.quality_preset, QualityPreset.ULTRA)
         self.assertEqual(config.hd_render_scale, 2.0)
         self.assertEqual(config.max_particles, 800)
+        self.assertTrue(config.enable_particle_glow)
+        self.assertEqual(config.bloom_quality, 3)
 
     def test_window_config_defaults(self) -> None:
         config = WindowConfig()

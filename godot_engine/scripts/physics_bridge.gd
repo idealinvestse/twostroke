@@ -27,6 +27,11 @@ func _ready():
 	timer.timeout.connect(_poll_connection)
 	add_child(timer)
 	_connect_to_server()
+	
+	# Connect to GameStateManager signals for pause/restart control
+	if GameStateManager:
+		GameStateManager.pause_requested.connect(_on_pause_requested)
+		GameStateManager.restart_requested.connect(_on_restart_requested)
 
 func _exit_tree():
 	_running = false
@@ -167,3 +172,23 @@ func set_fuel_ratio(ratio: float):
 
 func set_idle_trim(trim: float):
 	send_command("IDLE_TRIM", trim)
+
+func set_pause_state(paused: bool):
+	"""Send pause command to physics server."""
+	send_command("PAUSE", paused)
+
+func restart_simulation():
+	"""Send restart command to physics server."""
+	send_command("RESTART", "1")
+
+func select_profile(profile_key: String):
+	"""Send profile selection command to physics server."""
+	send_command("PROFILE", profile_key)
+
+func _on_pause_requested(paused: bool):
+	"""Handle pause request from GameStateManager."""
+	set_pause_state(paused)
+
+func _on_restart_requested():
+	"""Handle restart request from GameStateManager."""
+	restart_simulation()

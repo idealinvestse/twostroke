@@ -56,6 +56,7 @@ PIPE_Q_FACTOR = 2.5
 PIPE_AMPLITUDE_DECAY = 15.0  # 1/s, decay when exhaust closed
 PIPE_MAX_SUCTION_PA = 60000.0   # Max 0.6 bar below atm
 PIPE_MAX_PRESSURE_PA = 40000.0  # Max 0.4 bar above atm
+MAX_PIPE_AMPLITUDE = 80000.0    # Max amplitude (Pa) — ~0.8 bar peak, physical limit
 
 # Fuel film constants
 CRANKCASE_WET_FRACTION_BASE = 0.50

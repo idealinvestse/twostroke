@@ -2,32 +2,46 @@ from collections import deque
 
 import pygame
 
+import config as config_module
+import particles as particles_module
+import renderer as renderer_module
 from config import WINDOW, QualityPreset, get_quality_preset, TuningPreset, apply_tuning_preset, save_tuning_preset
 from particles import spawn_particles, update_particles
 from physics import EnginePhysics
 from renderer import EngineRenderer
+from ui import MainMenu
+from engine_profiles import apply_profile
 
 SUBSTEPS = 10
 PHYSICS_DT = 1.0 / 600.0  # Fixed physics timestep for stable simulation
 
 
+def apply_render_config(new_config) -> None:
+    """Propagate render configuration to all modules that cache the RENDER object."""
+    config_module.RENDER = new_config
+    particles_module.RENDER = new_config
+    renderer_module.RENDER = new_config
+
+
 class EngineApp:
-    def __init__(self) -> None:
-        try:
-            pygame.init()
-        except pygame.error as e:
-            raise RuntimeError(f"Failed to initialize PyGame: {e}")
+    def __init__(self, profile_key: str = "am6_stock", quality_preset: QualityPreset = QualityPreset.SIMPLE_2D) -> None:
+        # Initialize with selected profile and quality
+        new_config = get_quality_preset(quality_preset)
+        apply_render_config(new_config)
         
-        pygame.key.set_repeat(140, 25)
+        self._current_preset = quality_preset
+        self._presets = [
+            QualityPreset.SIMPLE_2D,
+            QualityPreset.LOW,
+            QualityPreset.MEDIUM,
+            QualityPreset.HIGH,
+            QualityPreset.ULTRA,
+        ]
         
-        try:
-            self.screen = pygame.display.set_mode((WINDOW.width, WINDOW.height))
-        except pygame.error as e:
-            raise RuntimeError(f"Failed to create display: {e}")
-        
-        pygame.display.set_caption(WINDOW.title)
-        self.clock = pygame.time.Clock()
         self.engine = EnginePhysics()
+        # Apply selected profile
+        apply_profile(self.engine, profile_key)
+        
         self.renderer = EngineRenderer(self.engine)
         self.particles = []
         self.pv_cyl_points: deque[tuple[float, float]] = deque(maxlen=300)
@@ -38,14 +52,8 @@ class EngineApp:
         self._physics_accumulator = 0.0
         self._starter_pressed = False
         self.state = self.engine.snapshot()
-        self._current_preset = QualityPreset.SIMPLE_2D
-        self._presets = [
-            QualityPreset.SIMPLE_2D,
-            QualityPreset.LOW,
-            QualityPreset.MEDIUM,
-            QualityPreset.HIGH,
-            QualityPreset.ULTRA,
-        ]
+        self._profile_key = profile_key
+        self._quality_preset = quality_preset
 
     def handle_event(self, event: pygame.event.Event) -> None:
         if event.type == pygame.QUIT:
@@ -89,19 +97,19 @@ class EngineApp:
             # Tuning presets (1-5)
             elif event.key == pygame.K_1:
                 apply_tuning_preset(self.engine, TuningPreset.STOCK)
-                print(f"Tuning: Stock")
+                print("Tuning: Stock")
             elif event.key == pygame.K_2:
                 apply_tuning_preset(self.engine, TuningPreset.GATTRIM)
-                print(f"Tuning: Gattrim")
+                print("Tuning: Gattrim")
             elif event.key == pygame.K_3:
                 apply_tuning_preset(self.engine, TuningPreset.RACING)
-                print(f"Tuning: Racing")
+                print("Tuning: Racing")
             elif event.key == pygame.K_4:
                 apply_tuning_preset(self.engine, TuningPreset.CLASSIC)
-                print(f"Tuning: Classic")
+                print("Tuning: Classic")
             elif event.key == pygame.K_5:
                 apply_tuning_preset(self.engine, TuningPreset.DRAGRACE)
-                print(f"Tuning: Dragrace")
+                print("Tuning: Dragrace")
             # Nya trimningsparametrar
             elif event.key == pygame.K_6:
                 # Justera kompression
@@ -161,10 +169,28 @@ class EngineApp:
         if 0 <= index < len(self._presets):
             self._current_preset = self._presets[index]
             new_config = get_quality_preset(self._current_preset)
-            global RENDER
-            RENDER = new_config
-            self.renderer = EngineRenderer(self.engine)
+            apply_render_config(new_config)
+            self.renderer = renderer_module.EngineRenderer(self.engine)
             print(f"Rendering preset: {self._current_preset.value}")
+
+    def restart_simulation(self) -> None:
+        """Restart the simulation with current profile and settings."""
+        # Reset engine with same profile
+        self.engine = EnginePhysics()
+        apply_profile(self.engine, self._profile_key)
+        
+        # Reset state tracking
+        self.pv_cyl_points.clear()
+        self.pv_cr_points.clear()
+        self._physics_accumulator = 0.0
+        self._starter_pressed = False
+        self.paused = False
+        
+        # Recreate renderer for new engine
+        self.renderer = EngineRenderer(self.engine)
+        self.state = self.engine.snapshot()
+        
+        print(f"Simulation restarted with profile: {self._profile_key}")
 
     def update(self, raw_dt: float) -> None:
         if self.paused:
@@ -185,17 +211,128 @@ class EngineApp:
     def render(self) -> None:
         dt = self.clock.get_time() / 1000.0
         self.renderer.draw(self.screen, self.state, self.particles, self.pv_cyl_points, self.pv_cr_points, dt)
+        
+        # Draw pause overlay if paused
+        if self.paused:
+            self._draw_pause_overlay()
+        
         pygame.display.flip()
+    
+    def _draw_pause_overlay(self) -> None:
+        """Draw pause menu overlay."""
+        # Semi-transparent background
+        overlay = pygame.Surface(self.screen.get_size(), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 128))
+        self.screen.blit(overlay, (0, 0))
+        
+        # Pause text
+        font_title = pygame.font.SysFont("Arial", 48, bold=True)
+        font_option = pygame.font.SysFont("Arial", 28)
+        
+        text = font_title.render("PAUSAD", True, (255, 255, 255))
+        rect = text.get_rect(center=(self.screen.get_width() // 2, 200))
+        self.screen.blit(text, rect)
+        
+        # Instructions
+        instructions = [
+            "ESC/P - Fortsätt",
+            "R - Starta om simulering",
+            "M - Huvudmeny",
+        ]
+        y = 280
+        for instruction in instructions:
+            text = font_option.render(instruction, True, (200, 200, 200))
+            rect = text.get_rect(center=(self.screen.get_width() // 2, y))
+            self.screen.blit(text, rect)
+            y += 40
 
-    def run(self) -> None:
+    def run(self, screen: pygame.Surface, clock: pygame.time.Clock) -> None:
+        """Run the simulation loop with provided screen and clock."""
+        self.screen = screen
+        self.clock = clock
+        
         while self.running:
             raw_dt = self.clock.tick(WINDOW.fps) / 1000.0 * self.slow_mo
+            
             for event in pygame.event.get():
-                self.handle_event(event)
+                if event.type == pygame.QUIT:
+                    self.running = False
+                    break
+                
+                # Handle pause menu keys even when paused
+                if event.type == pygame.KEYDOWN:
+                    if self.paused:
+                        if event.key == pygame.K_ESCAPE or event.key == pygame.K_p:
+                            self.paused = False
+                            continue
+                        elif event.key == pygame.K_r:
+                            self.restart_simulation()
+                            continue
+                        elif event.key == pygame.K_m:
+                            # Return to main menu
+                            self.running = False
+                            return "main_menu"
+                    else:
+                        if event.key == pygame.K_ESCAPE:
+                            self.paused = True
+                            continue
+                
+                # Only process simulation inputs when not paused
+                if not self.paused:
+                    self.handle_event(event)
+            
             self.update(raw_dt)
             self.render()
-        pygame.quit()
+        
+        return "quit"
 
 
 def run() -> None:
-    EngineApp().run()
+    """Main entry point - shows main menu then runs simulation loop."""
+    # Initialize PyGame once at module level
+    try:
+        pygame.init()
+    except pygame.error as e:
+        raise RuntimeError(f"Failed to initialize PyGame: {e}")
+    
+    pygame.key.set_repeat(140, 25)
+    
+    # Create initial window for main menu
+    try:
+        screen = pygame.display.set_mode((WINDOW.width, WINDOW.height))
+    except pygame.error as e:
+        raise RuntimeError(f"Failed to create display: {e}")
+    
+    pygame.display.set_caption(WINDOW.title)
+    clock = pygame.time.Clock()
+    
+    # Main loop - allow returning to menu after simulation
+    while True:
+        # Show main menu
+        menu = MainMenu(screen, lambda pk, qp: None)  # Callback not used directly
+        menu.running = True
+        menu.run()
+        
+        # Get selected settings
+        profile_key = menu.profiles[menu.selected_profile_idx][0] if menu.profiles else "am6_stock"
+        quality_preset = menu.quality_presets[menu.selected_quality_idx]
+        
+        # Apply display settings if changed
+        resolution = menu.resolutions[menu.selected_resolution_idx]
+        if menu.fullscreen:
+            screen = pygame.display.set_mode(resolution, pygame.FULLSCREEN)
+        else:
+            # Only resize if different from current
+            current_size = screen.get_size()
+            if current_size != resolution:
+                screen = pygame.display.set_mode(resolution)
+        
+        # Start simulation with selected settings
+        app = EngineApp(profile_key, quality_preset)
+        result = app.run(screen, clock)
+        
+        if result == "quit":
+            break
+        # If "main_menu", loop continues and shows menu again
+    
+    pygame.quit()

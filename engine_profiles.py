@@ -13,9 +13,82 @@ Källor:
   - Stage6, Malossi, Polini produktdata
   - Aprilia Forum mätdata och portjämförelser
   - 50factory.com tekniska datablad
+
+Version 3.1: JSON-baserad profil-databas med 22 stock + tuned profiler.
 """
 
 import math
+import json
+import os
+
+__all__ = [
+    # Profile data
+    'ALL_PROFILES', 'BASE_PROFILE',
+    # Legacy profiles
+    'AM6_STOCK', 'AM6_STAGE6_RT_70', 'AM6_MALOSSI_MHR_70', 'AM6_BIGBORE_80', 'AM6_LONGSTROKE_78',
+    'AM3_HORIZONTAL_STOCK', 'AM3_MALOSSI_SPORT_70',
+    'AM_HORIZONTAL_LC_STOCK', 'AM_HORIZONTAL_LC_DERESTRICTED', 'AM_HORIZONTAL_LC_MALOSSI_MHR_70',
+    'PIAGGIO_HIPER2_STOCK', 'PIAGGIO_POLINI_70', 'PIAGGIO_MALOSSI_70',
+    'DERBI_EBE_STOCK', 'DERBI_POLINI_70', 'DERBI_D50B_STOCK',
+    # JSON loading functions
+    'get_profiles_json_path', 'load_json_profiles', 'get_all_json_profile_keys', 'get_json_profile_metadata',
+    # Profile application functions
+    'apply_profile', 'apply_json_profile', 'list_profiles', 'list_all_profiles',
+    # Utility functions
+    'port_height_from_timing',
+]
+
+# ---------------------------------------------------------------------------
+# JSON Profile Loading (v3.1)
+# ---------------------------------------------------------------------------
+
+def get_profiles_json_path() -> str:
+    """Get the path to the engine_profiles.json file."""
+    # Look in same directory as this module
+    module_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(module_dir, "engine_profiles.json")
+
+
+def load_json_profiles() -> dict:
+    """
+    Load engine profiles from engine_profiles.json.
+    Returns a dict of {profile_key: profile_data}.
+    """
+    json_path = get_profiles_json_path()
+    if not os.path.exists(json_path):
+        return {}
+
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data.get('profiles', {})
+    except (json.JSONDecodeError, IOError):
+        return {}
+
+
+def get_all_json_profile_keys() -> list:
+    """Return a list of all JSON profile keys."""
+    return list(load_json_profiles().keys())
+
+
+def get_json_profile_metadata(profile_key: str) -> dict:
+    """
+    Get metadata for a JSON profile (port_timing, trim_parts, notes, etc.)
+    Returns empty dict if profile not found.
+    """
+    profiles = load_json_profiles()
+    prof = profiles.get(profile_key, {})
+    return {
+        'port_timing_deg': prof.get('port_timing_deg', {}),
+        'trim_parts': prof.get('trim_parts', []),
+        'notes': prof.get('notes', ''),
+        'research_sources': prof.get('research_sources', []),
+        'cooling': prof.get('cooling', 'air'),
+        'stock_power_kw': prof.get('stock_power_kw', 0),
+        'stock_rpm_peak': prof.get('stock_rpm_peak', 0),
+        'carburetor': prof.get('carburetor', ''),
+    }
+
 
 # ---------------------------------------------------------------------------
 # Hjälpfunktion: konvertera porttiminig till pistonvandring (x)
@@ -553,18 +626,37 @@ ALL_PROFILES = {
 # Loader — applicera profil på EnginePhysics
 # ===========================================================================
 
+def _resolve_profile(profile_key: str) -> tuple[dict, str]:
+    """
+    Resolve a profile key to profile data.
+    Checks legacy ALL_PROFILES first, then falls back to JSON profiles.
+    Returns (profile_data, source) where source is 'legacy' or 'json'.
+    Raises KeyError if not found.
+    """
+    if profile_key in ALL_PROFILES:
+        return ALL_PROFILES[profile_key], 'legacy'
+
+    json_profiles = load_json_profiles()
+    if profile_key in json_profiles:
+        return json_profiles[profile_key], 'json'
+
+    raise KeyError(f"Profile '{profile_key}' not found in legacy or JSON profiles")
+
+
 def apply_profile(engine, profile_key: str) -> None:
     """
-    Applicera en motorprofil från ALL_PROFILES på ett EnginePhysics-objekt.
+    Applicera en motorprofil på ett EnginePhysics-objekt.
+    Searches legacy ALL_PROFILES first, then falls back to JSON profiles.
+
     Exempel:
         from engine_profiles import apply_profile
         engine = EnginePhysics()
-        apply_profile(engine, "am6_stage6_rt_70")
+        apply_profile(engine, "am6_stage6_rt_70")  # legacy key
+        apply_profile(engine, "am6_stock_vertical")  # JSON key (v3.1)
     """
-    import math
+    profile, source = _resolve_profile(profile_key)
 
-    profile = ALL_PROFILES[profile_key]
-
+    # Map profile values to engine physics - supports both legacy and JSON formats
     engine.B = profile["B"]
     engine.R = profile["stroke"] / 2.0
     engine.L = profile["L"]
@@ -604,20 +696,79 @@ def apply_profile(engine, profile_key: str) -> None:
     engine.fuel_film_cyl = 0.0
 
 
+def apply_json_profile(engine, profile_key: str) -> bool:
+    """
+    Explicitly apply a JSON profile by key.
+    Returns True if successful, False if profile not found.
+    """
+    json_profiles = load_json_profiles()
+    if profile_key not in json_profiles:
+        return False
+
+    # Temporarily inject into ALL_PROFILES for apply_profile to find
+    profile_data = json_profiles[profile_key]
+    ALL_PROFILES[profile_key] = profile_data
+    try:
+        apply_profile(engine, profile_key)
+        return True
+    finally:
+        # Clean up - remove the temporary entry
+        if profile_key in ALL_PROFILES and profile_key not in [
+            "am6_stock", "am6_stage6_rt_70", "am6_malossi_mhr_70", "am6_bigbore_80",
+            "am6_longstroke_78", "am3_horizontal_stock", "am3_malossi_sport_70",
+            "aerox_lc_stock", "aerox_lc_derestricted", "aerox_lc_malossi_mhr_70",
+            "piaggio_c9_stock", "piaggio_c9_polini_70", "piaggio_c9_malossi_70",
+            "derbi_ebe_stock", "derbi_ebe_polini_70", "derbi_d50b_stock"
+        ]:
+            del ALL_PROFILES[profile_key]
+
+
 def list_profiles() -> list:
-    """Returnera lista med alla tillgängliga profilnycklar och namn."""
+    """Returnera lista med alla tillgängliga legacy profilnycklar och namn."""
     return [(k, v["name"]) for k, v in ALL_PROFILES.items()]
 
 
+def list_all_profiles() -> list:
+    """
+    Returnera lista med ALLA profilnycklar och namn (legacy + JSON v3.1).
+    Format: [(key, name, source), ...] där source är 'legacy' eller 'json'.
+    """
+    result = [(k, v["name"], 'legacy') for k, v in ALL_PROFILES.items()]
+
+    json_profiles = load_json_profiles()
+    for key, data in json_profiles.items():
+        if key not in ALL_PROFILES:
+            result.append((key, data.get("name", key), 'json'))
+
+    return sorted(result, key=lambda x: x[1])
+
+
 if __name__ == "__main__":
-    print("Tillgängliga motorprofiler:")
-    for key, name in list_profiles():
-        p = ALL_PROFILES[key]
+    print("=" * 70)
+    print("MOTORPROFILER - Legacy (Python) + JSON v3.1")
+    print("=" * 70)
+
+    # Show all profiles with source indication
+    for key, name, source in list_all_profiles():
+        # Get profile data based on source
+        if source == 'legacy':
+            p = ALL_PROFILES[key]
+        else:
+            json_profiles = load_json_profiles()
+            p = json_profiles[key]
+
         bore_mm = p["B"] * 1000
         stroke_mm = p["stroke"] * 1000
         cc = math.pi * (bore_mm / 2) ** 2 * stroke_mm / 1000
-        print(f"  {key:<35} {name}")
+        source_tag = "[legacy]" if source == 'legacy' else "[JSON]"
+        print(f"  {key:<35} {name} {source_tag}")
         print(f"    {bore_mm:.1f}×{stroke_mm:.1f}mm = {cc:.1f}cc  "
               f"CR={p['compression_ratio']}:1  "
               f"{p['stock_power_kw']}kW @ {p['stock_rpm_peak']}RPM  "
               f"Exh={math.degrees(math.acos(1 - p['x_exh']*2/p['stroke']))*2:.0f}°")
+        # Show metadata for JSON profiles
+        if source == 'json':
+            meta = get_json_profile_metadata(key)
+            if meta['notes']:
+                print(f"    Notes: {meta['notes'][:60]}...")
+        print()

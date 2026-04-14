@@ -1,4 +1,4 @@
-[gd_scene load_steps=18 format=3]
+[gd_scene load_steps=19 format=3]
 
 [ext_resource type="Script" path="res://scripts/physics_bridge.gd" id="1_physics"]
 [ext_resource type="Script" path="res://scripts/engine_controller.gd" id="2_controller"]
@@ -10,6 +10,7 @@
 [ext_resource type="Material" path="res://assets/materials/exhaust_heat.tres" id="8_exhaust"]
 [ext_resource type="PackedScene" path="res://scenes/ui/dashboard.tscn" id="9_dashboard"]
 [ext_resource type="Material" path="res://assets/materials/aluminum_brushed.tres" id="10_aluminum"]
+[ext_resource type="PackedScene" path="res://scenes/ui/pause_menu.tscn" id="10_pause_menu"]
 
 [sub_resource type="CylinderMesh" id="CylinderMesh_exhaust"]
 resource_name = "Exhaust Pipe"
@@ -212,3 +213,5 @@ camera = NodePath("../Camera3D")
 
 [node name="Dashboard" parent="CanvasLayer" instance=ExtResource("9_dashboard")]
 physics_bridge = NodePath("../../PhysicsBridge")
+
+[node name="PauseMenu" parent="CanvasLayer" instance=ExtResource("10_pause_menu")]

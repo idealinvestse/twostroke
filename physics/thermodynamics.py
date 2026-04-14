@@ -21,6 +21,45 @@ from physics.utils import clamp
 
 
 @dataclass
+class GasProperties:
+    """Temperature and composition-dependent gas properties."""
+    gamma: float  # Heat capacity ratio
+    c_v: float    # Specific heat at constant volume (J/(kg·K))
+    c_p: float    # Specific heat at constant pressure (J/(kg·K))
+
+
+def gas_properties(temperature: float, burn_fraction: float = 0.0) -> GasProperties:
+    """Calculate gas properties based on temperature and burn fraction.
+
+    Unburned mixture (air+fuel): γ ≈ 1.4 at 300K, decreasing with temperature.
+    Burned gas: γ ≈ 1.25-1.30 at high temperature.
+    Linear interpolation between states based on burn_fraction.
+
+    Args:
+        temperature: Gas temperature (K)
+        burn_fraction: Fraction of gas that is burned (0-1)
+
+    Returns:
+        GasProperties with gamma, c_v, c_p
+    """
+    # Unburned mixture: γ varies from 1.4 (cold) to ~1.35 (hot)
+    gamma_unburned = 1.4 - 0.05 * min(1.0, max(0.0, (temperature - 300.0)) / 2000.0)
+
+    # Burned gas: γ varies from 1.32 (warm) to ~1.25 (very hot)
+    gamma_burned = 1.32 - 0.07 * min(1.0, max(0.0, (temperature - 500.0)) / 2000.0)
+
+    # Interpolate based on burn fraction
+    gamma = gamma_unburned * (1.0 - burn_fraction) + gamma_burned * burn_fraction
+
+    # Derive C_V and C_P from γ and R_GAS
+    # R = C_P - C_V, γ = C_P / C_V → C_V = R / (γ - 1)
+    c_v = R_GAS / (gamma - 1.0)
+    c_p = c_v + R_GAS
+
+    return GasProperties(gamma=gamma, c_v=c_v, c_p=c_p)
+
+
+@dataclass
 class GasState:
     """Thermodynamic state of a gas volume."""
     mass: float        # Total mass (kg)
