@@ -1,0 +1,16 @@
+[gd_resource type="StandardMaterial3D" format=3]
+
+[resource]
+resource_name = "Aluminum Brushed"
+albedo_color = Color(0.82, 0.84, 0.86, 1)
+metallic = 0.95
+metallic_specular = 0.8
+roughness = 0.35
+roughness_texture_channel = 0
+normal_enabled = true
+normal_scale = 0.5
+clearcoat_enabled = false
+refraction_enabled = false
+uv1_scale = Vector3(2, 2, 2)
+uv1_triplanar = true
+uv1_world_triplanar = true

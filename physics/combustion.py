@@ -112,6 +112,7 @@ class CombustionModel:
         m_air_cyl: float,
         throttle_factor: float,
         ignition_angle_deg: float,
+        omega: float = 90.0,
     ) -> CombustionState:
         """Initialize combustion state.
         
@@ -149,7 +150,7 @@ class CombustionModel:
         efficiency = mixture_eff * ignition_eff
         
         # Calculate burn duration based on turbulence
-        turbulence = 0.65 + 0.70 * throttle_factor + 0.25 * clamp01(abs(0) / 260.0)
+        turbulence = 0.65 + 0.70 * throttle_factor + 0.25 * clamp01(abs(omega) / 260.0)
         turbulence = max(0.1, turbulence)
         duration_deg = 55.0 / turbulence
         

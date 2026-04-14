@@ -62,6 +62,7 @@ class SliderCrankKinematics:
         """
         self.R = HALF_STROKE_M      # Crank radius (m)
         self.L = CON_ROD_M          # Connecting rod length (m)
+        self.stroke = 2 * self.R    # Piston stroke (m)
         self.A_p = PISTON_AREA_M2   # Piston area (m²)
         self.V_c = CLEARANCE_VOLUME_M3   # Clearance volume at TDC (m³)
         self.V_cr_base = CRANKCASE_VOLUME_M3  # Base crankcase volume (m³)
@@ -89,8 +90,8 @@ class SliderCrankKinematics:
         # Guard against division by zero
         c_beta = max(c_beta, 1e-6)
 
-        # Piston position from TDC
-        x = self.R + self.L - (self.R * c_theta + self.L * c_beta)
+        # Piston position from TDC (clamp to avoid numerical errors)
+        x = max(0.0, min(self.stroke, self.R + self.L - (self.R * c_theta + self.L * c_beta)))
 
         # First derivative: dx/dtheta
         dx_dtheta = self.R * s_theta + self.R * c_theta * s_beta / c_beta

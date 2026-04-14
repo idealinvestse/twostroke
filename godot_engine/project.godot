@@ -1,0 +1,46 @@
+; Engine Rendering v3.0 - Godot 4.x Project
+; 2-Stroke Engine Simulation with 3D Visualization
+
+[application]
+config/name="2-Stroke Engine Simulation v3.0"
+config/description="Professional 3D visualization of 2-stroke engine thermodynamics"
+config/version="3.0.0"
+run/main_scene="res://scenes/main.tscn"
+config/features=PackedStringArray("4.6", "Forward Plus")
+config/icon="res://assets/icon.png"
+
+[display]
+window/size/viewport_width=1920
+window/size/viewport_height=1080
+window/size/mode=3
+window/vsync/vsync_mode=1
+
+[rendering]
+renderer/rendering_method="forward_plus"
+renderer/rendering_method.mobile="forward_plus"
+anti_aliasing/quality/msaa_3d=2
+anti_aliasing/quality/screen_space_aa=1
+environment/screen_space_reflections/roughness_quality=1
+global_illumination/gi/use_half_resolution=true
+environment/glow/upscale_mode=1
+environment/glow/use_bicubic_upscale=true
+
+[physics]
+common/physics_ticks_per_second=60
+common/max_physics_steps_per_frame=8
+
+[input]
+camera_orbit={"mouse_motion":"left_mouse"}
+camera_zoom={"mouse_motion":"scroll"}
+toggle_cutaway={"key":"C"}
+toggle_play={"key":"Space"}
+throttle_up={"key":"Up"}
+throttle_down={"key":"Down"}
+
+[layer_names]
+3d_render/layer_1="Default"
+3d_render/layer_2="UI"
+3d_render/layer_3="Cutaway"
+
+[python]
+script/config={}

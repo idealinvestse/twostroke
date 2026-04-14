@@ -1,0 +1,214 @@
+[gd_scene load_steps=18 format=3]
+
+[ext_resource type="Script" path="res://scripts/physics_bridge.gd" id="1_physics"]
+[ext_resource type="Script" path="res://scripts/engine_controller.gd" id="2_controller"]
+[ext_resource type="Environment" path="res://assets/default_environment.tres" id="3_env"]
+[ext_resource type="PackedScene" path="res://scenes/engine/cylinder.tscn" id="4_cylinder"]
+[ext_resource type="PackedScene" path="res://scenes/engine/piston.tscn" id="5_piston"]
+[ext_resource type="PackedScene" path="res://scenes/engine/crankshaft.tscn" id="6_crankshaft"]
+[ext_resource type="PackedScene" path="res://scenes/engine/conrod.tscn" id="7_conrod"]
+[ext_resource type="Material" path="res://assets/materials/exhaust_heat.tres" id="8_exhaust"]
+[ext_resource type="PackedScene" path="res://scenes/ui/dashboard.tscn" id="9_dashboard"]
+[ext_resource type="Material" path="res://assets/materials/aluminum_brushed.tres" id="10_aluminum"]
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_exhaust"]
+resource_name = "Exhaust Pipe"
+top_radius = 0.06
+bottom_radius = 0.06
+height = 0.4
+radial_segments = 24
+
+[sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_fire"]
+resource_name = "Combustion Fire"
+particle_flag_align_y = true
+particle_flag_rotate_y = true
+emission_shape = 1
+emission_sphere_radius = 0.08
+angle_min = -180.0
+angle_max = 180.0
+direction = Vector3(0, 1, 0)
+spread = 45.0
+initial_velocity_min = 0.5
+initial_velocity_max = 2.0
+angular_velocity_min = -100.0
+angular_velocity_max = 100.0
+gravity = Vector3(0, -2, 0)
+scale_min = 0.5
+scale_max = 1.5
+color = Color(1, 0.4, 0.1, 1)
+turbulence_enabled = true
+turbulence_noise_strength = 2.0
+turbulence_noise_scale = 0.5
+
+[sub_resource type="QuadMesh" id="QuadMesh_particle"]
+size = Vector2(0.1, 0.1)
+
+[sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_gas"]
+resource_name = "Gas Flow"
+emission_shape = 2
+emission_box_extents = Vector3(0.05, 0.05, 0.05)
+direction = Vector3(1, 0, 0)
+spread = 30.0
+initial_velocity_min = 1.0
+initial_velocity_max = 3.0
+gravity = Vector3(0, -2.0, 0)
+scale_min = 0.05
+scale_max = 0.15
+color = Color(0.2, 0.6, 1, 0.4)
+
+[sub_resource type="QuadMesh" id="QuadMesh_gas"]
+size = Vector2(0.05, 0.05)
+
+[sub_resource type="GDScript" id="GDScript_orbit"]
+script/source = "extends Node
+
+@export var camera: NodePath
+@export var rotate_speed: float = 0.005
+@export var zoom_speed: float = 0.1
+@export var min_distance: float = 1.0
+@export var max_distance: float = 5.0
+
+var _camera: Camera3D = null
+var _distance: float = 2.0
+var _rot_x: float = 0.0
+var _rot_y: float = 0.0
+var _dragging: bool = false
+
+func _ready():
+	if camera:
+		_camera = get_node(camera)
+	_update_position()
+
+func _input(event):
+	if event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_LEFT:
+			_dragging = event.pressed
+		elif event.button_index == MOUSE_BUTTON_WHEEL_UP:
+			_distance = maxf(_distance - zoom_speed, min_distance)
+			_update_position()
+		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			_distance = minf(_distance + zoom_speed, max_distance)
+			_update_position()
+	
+	if event is InputEventMouseMotion and _dragging:
+		_rot_x -= event.relative.x * rotate_speed
+		_rot_y -= event.relative.y * rotate_speed
+		_rot_y = clampf(_rot_y, -PI/2 + 0.1, PI/2 - 0.1)
+		_update_position()
+
+func _update_position():
+	if not _camera:
+		return
+	
+	var pos = Vector3(
+		sin(_rot_x) * cos(_rot_y) * _distance,
+		sin(_rot_y) * _distance,
+		cos(_rot_x) * cos(_rot_y) * _distance
+	)
+	
+	_camera.position = pos
+	_camera.look_at(Vector3.ZERO, Vector3.UP)
+"
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_crankcase"]
+resource_name = "Crankcase"
+top_radius = 0.22
+bottom_radius = 0.28
+height = 0.4
+radial_segments = 32
+
+[node name="Main" type="Node3D"]
+
+; Environment and lighting
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = ExtResource("3_env")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.707107, -0.5, 0.5, 0, 0.707107, 0.707107, -0.707107, -0.5, 0.5, 10, 10, 10)
+light_color = Color(1, 0.98, 0.95, 1)
+light_energy = 1.5
+shadow_enabled = true
+shadow_bias = 0.01
+
+; Physics Bridge (autoloaded)
+[node name="PhysicsBridge" type="Node" parent="."]
+script = ExtResource("1_physics")
+host = "127.0.0.1"
+port = 9999
+
+; Engine Assembly
+[node name="EngineAssembly" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
+
+[node name="EngineController" type="Node3D" parent="EngineAssembly"]
+script = ExtResource("2_controller")
+physics_bridge = NodePath("../../PhysicsBridge")
+crankshaft = NodePath("../Crankshaft")
+conrod = NodePath("../Conrod")
+piston = NodePath("../Piston")
+cylinder_head = NodePath("../Cylinder/Head")
+combustion_glow = NodePath("../Cylinder/Head/CombustionLight")
+exhaust_particles = NodePath("../CombustionParticles")
+gas_flow_particles = NodePath("../GasFlowParticles")
+
+; Cylinder Assembly
+[node name="Cylinder" parent="EngineAssembly" instance=ExtResource("4_cylinder")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.4, 0)
+
+[node name="CombustionLight" type="OmniLight3D" parent="EngineAssembly/Cylinder/Head"]
+light_color = Color(1, 0.6, 0.2, 1)
+light_energy = 0.0
+omni_range = 0.5
+visible = false
+
+[node name="ExhaustPipe" type="MeshInstance3D" parent="EngineAssembly"]
+transform = Transform3D(0, -1, 0, 1, 0, 0, 0, 0, 1, 0.42, 0.5, 0)
+mesh = SubResource("CylinderMesh_exhaust")
+surface_material_override/0 = ExtResource("8_exhaust")
+
+[node name="Piston" parent="EngineAssembly" instance=ExtResource("5_piston")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.03, 0)
+
+[node name="Conrod" parent="EngineAssembly" instance=ExtResource("7_conrod")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
+
+[node name="Crankshaft" parent="EngineAssembly" instance=ExtResource("6_crankshaft")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.3, 0)
+
+[node name="Crankcase" type="MeshInstance3D" parent="EngineAssembly"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.2, 0)
+mesh = SubResource("CylinderMesh_crankcase")
+surface_material_override/0 = ExtResource("10_aluminum")
+
+[node name="CombustionParticles" type="GPUParticles3D" parent="EngineAssembly"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 0)
+emitting = false
+amount = 500
+process_material = SubResource("ParticleProcessMaterial_fire")
+draw_pass_1 = SubResource("QuadMesh_particle")
+
+[node name="GasFlowParticles" type="GPUParticles3D" parent="EngineAssembly"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.3, 0.4, 0)
+emitting = false
+amount = 200
+process_material = SubResource("ParticleProcessMaterial_gas")
+draw_pass_1 = SubResource("QuadMesh_gas")
+
+; Camera System
+[node name="CameraRig" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 2)
+
+[node name="Camera3D" type="Camera3D" parent="CameraRig"]
+fov = 60.0
+near = 0.01
+far = 100.0
+
+[node name="OrbitControls" type="Node" parent="CameraRig"]
+script = SubResource("GDScript_orbit")
+camera = NodePath("../Camera3D")
+
+; UI Canvas with Dashboard
+[node name="CanvasLayer" type="CanvasLayer" parent="."]
+
+[node name="Dashboard" parent="CanvasLayer" instance=ExtResource("9_dashboard")]
+physics_bridge = NodePath("../../PhysicsBridge")

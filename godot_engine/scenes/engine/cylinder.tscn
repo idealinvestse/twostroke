@@ -1,0 +1,97 @@
+[gd_scene load_steps=6 format=3]
+
+[ext_resource type="Material" path="res://assets/materials/aluminum_brushed.tres" id="1_aluminum"]
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_cylinder"]
+resource_name = "Cylinder Barrel"
+top_radius = 0.22
+bottom_radius = 0.22
+height = 0.8
+radial_segments = 32
+rings = 4
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_head"]
+resource_name = "Cylinder Head"
+top_radius = 0.22
+bottom_radius = 0.22
+height = 0.15
+radial_segments = 32
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_fin"]
+resource_name = "Cooling Fin"
+top_radius = 0.24
+bottom_radius = 0.24
+height = 0.02
+radial_segments = 32
+
+[sub_resource type="BoxMesh" id="BoxMesh_port"]
+resource_name = "Port Opening"
+size = Vector3(0.12, 0.08, 0.05)
+
+[node name="Cylinder" type="Node3D"]
+
+; Main cylinder barrel
+[node name="Barrel" type="MeshInstance3D" parent="."]
+mesh = SubResource("CylinderMesh_cylinder")
+surface_material_override/0 = ExtResource("1_aluminum")
+
+; Cooling fins (stacked)
+[node name="Fins" type="Node3D" parent="."]
+
+[node name="Fin1" type="MeshInstance3D" parent="Fins"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.3, 0)
+mesh = SubResource("CylinderMesh_fin")
+surface_material_override/0 = ExtResource("1_aluminum")
+
+[node name="Fin2" type="MeshInstance3D" parent="Fins"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.2, 0)
+mesh = SubResource("CylinderMesh_fin")
+surface_material_override/0 = ExtResource("1_aluminum")
+
+[node name="Fin3" type="MeshInstance3D" parent="Fins"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.1, 0)
+mesh = SubResource("CylinderMesh_fin")
+surface_material_override/0 = ExtResource("1_aluminum")
+
+[node name="Fin4" type="MeshInstance3D" parent="Fins"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.0, 0)
+mesh = SubResource("CylinderMesh_fin")
+surface_material_override/0 = ExtResource("1_aluminum")
+
+[node name="Fin5" type="MeshInstance3D" parent="Fins"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.1, 0)
+mesh = SubResource("CylinderMesh_fin")
+surface_material_override/0 = ExtResource("1_aluminum")
+
+[node name="Fin6" type="MeshInstance3D" parent="Fins"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.2, 0)
+mesh = SubResource("CylinderMesh_fin")
+surface_material_override/0 = ExtResource("1_aluminum")
+
+[node name="Fin7" type="MeshInstance3D" parent="Fins"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.3, 0)
+mesh = SubResource("CylinderMesh_fin")
+surface_material_override/0 = ExtResource("1_aluminum")
+
+; Cylinder head
+[node name="Head" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.475, 0)
+mesh = SubResource("CylinderMesh_head")
+surface_material_override/0 = ExtResource("1_aluminum")
+
+; Exhaust port (on side)
+[node name="ExhaustPort" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.22, 0.1, 0)
+mesh = SubResource("BoxMesh_port")
+surface_material_override/0 = ExtResource("1_aluminum")
+
+; Transfer ports (on side)
+[node name="TransferPort1" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.22, -0.1, 0.1)
+mesh = SubResource("BoxMesh_port")
+surface_material_override/0 = ExtResource("1_aluminum")
+
+[node name="TransferPort2" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.22, -0.1, -0.1)
+mesh = SubResource("BoxMesh_port")
+surface_material_override/0 = ExtResource("1_aluminum")

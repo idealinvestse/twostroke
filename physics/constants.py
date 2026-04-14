@@ -88,13 +88,12 @@ CRANKCASE_VOLUME_RATIO = 1.4    # 1.4x displacement (was 1.8x)
 
 # Port positions (relative to TDC, in mm from TDC)
 # For 50cc engine with ~40mm stroke:
-# Need earlier opening for better scavenging and fuel transfer
-# Exhaust opens earlier (~55% of stroke) for better blowdown
-# Transfer opens at ~65% of stroke for better fuel delivery
-EXHAUST_PORT_OPEN_MM = 22.0     # x_exh (~55% of stroke) - earlier for 50cc
-TRANSFER_PORT_OPEN_MM = 26.0     # x_tr (~65% of stroke) - earlier for 50cc
-EXHAUST_PORT_WIDTH_MM = 30.0     # w_exh (slightly wider for flow)
-TRANSFER_PORT_WIDTH_MM = 26.0    # w_tr (wider for better fuel transfer)
+# Exhaust opens at ~50% of stroke for blowdown
+# Transfer opens at ~55% of stroke - earlier to open when crankcase pressure is high
+EXHAUST_PORT_OPEN_MM = 20.0     # x_exh (~50% of stroke)
+TRANSFER_PORT_OPEN_MM = 22.0     # x_tr (~55% of stroke) - opens before max crankcase compression
+EXHAUST_PORT_WIDTH_MM = 35.0     # w_exh (wider for better blowdown)
+TRANSFER_PORT_WIDTH_MM = 32.0    # w_tr (wider for better fuel transfer)
 
 # Maximum intake area
 MAX_INTAKE_AREA_M2 = 0.0012     # m², A_in_max

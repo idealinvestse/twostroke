@@ -1,0 +1,52 @@
+[gd_scene load_steps=6 format=3]
+
+[ext_resource type="Material" path="res://assets/materials/aluminum_brushed.tres" id="1_aluminum"]
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_piston"]
+resource_name = "Piston Body"
+top_radius = 0.21
+bottom_radius = 0.21
+height = 0.15
+radial_segments = 32
+
+[sub_resource type="TorusMesh" id="TorusMesh_ring1"]
+resource_name = "Piston Ring 1"
+inner_radius = 0.205
+outer_radius = 0.215
+ring_segments = 32
+
+[sub_resource type="TorusMesh" id="TorusMesh_ring2"]
+resource_name = "Piston Ring 2"
+inner_radius = 0.205
+outer_radius = 0.215
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_pin"]
+resource_name = "Wrist Pin"
+top_radius = 0.04
+bottom_radius = 0.04
+height = 0.35
+radial_segments = 16
+
+[node name="Piston" type="Node3D"]
+
+; Piston body
+[node name="Body" type="MeshInstance3D" parent="."]
+mesh = SubResource("CylinderMesh_piston")
+surface_material_override/0 = ExtResource("1_aluminum")
+
+; Piston rings
+[node name="Ring1" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.04, 0)
+mesh = SubResource("TorusMesh_ring1")
+surface_material_override/0 = ExtResource("1_aluminum")
+
+[node name="Ring2" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.0, 0)
+mesh = SubResource("TorusMesh_ring2")
+surface_material_override/0 = ExtResource("1_aluminum")
+
+; Wrist pin
+[node name="WristPin" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0, -1, 0, 1, 0, 0, -0.05, 0)
+mesh = SubResource("CylinderMesh_pin")
+material_override = ExtResource("1_aluminum")

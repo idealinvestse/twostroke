@@ -1,0 +1,179 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/ui_controller.gd" id="1_ui"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxPanel_bg"]
+bg_color = Color(0.1, 0.1, 0.12, 0.9)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.3, 0.3, 0.35, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxPanel_status"]
+bg_color = Color(0.15, 0.15, 0.18, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.25, 0.25, 0.3, 1)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
+
+[node name="Dashboard" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_ui")
+
+[node name="Panel" type="Panel" parent="."]
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -320.0
+offset_top = 20.0
+offset_right = -20.0
+offset_bottom = 680.0
+grow_horizontal = 0
+theme_override_styles/panel = SubResource("StyleBoxPanel_bg")
+
+[node name="VBoxContainer" type="VBoxContainer" parent="Panel"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 15.0
+offset_top = 15.0
+offset_right = -15.0
+offset_bottom = -15.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 10
+
+[node name="Title" type="Label" parent="Panel/VBoxContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "Engine Dashboard"
+horizontal_alignment = 1
+
+[node name="HSeparator" type="HSeparator" parent="Panel/VBoxContainer"]
+layout_mode = 2
+
+[node name="StatusPanel" type="Panel" parent="Panel/VBoxContainer"]
+custom_minimum_size = Vector2(0, 80)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxPanel_status")
+
+[node name="StatusLabel" type="Label" parent="Panel/VBoxContainer/StatusPanel"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 10.0
+offset_top = 10.0
+offset_right = -10.0
+offset_bottom = -10.0
+grow_horizontal = 2
+grow_vertical = 2
+text = "Waiting for physics server..."
+horizontal_alignment = 1
+vertical_alignment = 1
+autowrap_mode = 2
+
+[node name="DataContainer" type="VBoxContainer" parent="Panel/VBoxContainer"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="RPMLabel" type="Label" parent="Panel/VBoxContainer/DataContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "RPM: 0"
+
+[node name="PressureLabel" type="Label" parent="Panel/VBoxContainer/DataContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "Pressure: 0.00 Bar"
+
+[node name="TempLabel" type="Label" parent="Panel/VBoxContainer/DataContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "Temp: 293 K"
+
+[node name="LambdaLabel" type="Label" parent="Panel/VBoxContainer/DataContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "Lambda: 1.00"
+
+[node name="HSeparator2" type="HSeparator" parent="Panel/VBoxContainer"]
+layout_mode = 2
+
+[node name="ControlsLabel" type="Label" parent="Panel/VBoxContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "Controls"
+horizontal_alignment = 1
+
+[node name="ThrottleContainer" type="VBoxContainer" parent="Panel/VBoxContainer"]
+layout_mode = 2
+
+[node name="ThrottleLabel" type="Label" parent="Panel/VBoxContainer/ThrottleContainer"]
+layout_mode = 2
+text = "Throttle: 0%"
+
+[node name="ThrottleSlider" type="HSlider" parent="Panel/VBoxContainer/ThrottleContainer"]
+layout_mode = 2
+max_value = 100.0
+step = 1.0
+
+[node name="IgnitionContainer" type="VBoxContainer" parent="Panel/VBoxContainer"]
+layout_mode = 2
+
+[node name="IgnitionLabel" type="Label" parent="Panel/VBoxContainer/IgnitionContainer"]
+layout_mode = 2
+text = "Ignition Timing: 342°"
+
+[node name="IgnitionSlider" type="HSlider" parent="Panel/VBoxContainer/IgnitionContainer"]
+layout_mode = 2
+min_value = 300.0
+max_value = 380.0
+step = 1.0
+value = 342.0
+
+[node name="ButtonsContainer" type="HBoxContainer" parent="Panel/VBoxContainer"]
+layout_mode = 2
+alignment = 1
+
+[node name="IgnitionButton" type="Button" parent="Panel/VBoxContainer/ButtonsContainer"]
+layout_mode = 2
+toggle_mode = true
+button_pressed = true
+text = "Ignition [I]"
+
+[node name="FuelButton" type="Button" parent="Panel/VBoxContainer/ButtonsContainer"]
+layout_mode = 2
+toggle_mode = true
+text = "Fuel Cut [K]"
+
+[node name="StarterButton" type="Button" parent="Panel/VBoxContainer/ButtonsContainer"]
+layout_mode = 2
+action_mode = 0
+text = "Starter [S]"
+
+[node name="HSeparator3" type="HSeparator" parent="Panel/VBoxContainer"]
+layout_mode = 2
+
+[node name="ShortcutsLabel" type="Label" parent="Panel/VBoxContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "Shortcuts:\n↑/↓ - Throttle\nI - Ignition\nK - Fuel Cut\nS - Starter\nC - Cutaway\nSpace - Play/Pause"
+autowrap_mode = 2

@@ -5,6 +5,7 @@ for a realistic 2-stroke engine model.
 """
 
 from physics.engine_physics import EnginePhysics, EngineSnapshot
+from physics.cylinder import Cylinder, CylinderState
 from physics.thermodynamics import Thermodynamics
 from physics.kinematics import SliderCrankKinematics, KinematicState
 from physics.flows import FlowCalculator, ScavengingCalculator, ScavengingModel, ScavengingState
@@ -14,6 +15,31 @@ from physics.constants import (
     MIN_PRESSURE,
     T_ATM,
     GAMMA,
+    R_GAS,
+    P_ATM,
+    C_V,
+    C_P,
+    STOICH_AFR,
+    FUEL_LHV,
+    MIN_CRANKCASE_PRESSURE,
+    MAX_CRANKCASE_PRESSURE,
+    DISCHARGE_COEF_EXHAUST,
+    DISCHARGE_COEF_TRANSFER,
+    DISCHARGE_COEF_INTAKE_MAIN,
+    DISCHARGE_COEF_INTAKE_IDLE,
+    EXHAUST_PORT_OPEN_M,
+    TRANSFER_PORT_OPEN_M,
+    EXHAUST_PORT_WIDTH_M,
+    TRANSFER_PORT_WIDTH_M,
+    PISTON_AREA_M2,
+    HALF_STROKE_M,
+    CON_ROD_M,
+    CLEARANCE_VOLUME_M3,
+    CRANKCASE_VOLUME_M3,
+    BORE_M,
+    STROKE_M,
+    DISPLACEMENT_M3,
+    PIPE_RESONANCE_FREQ_HZ,
 )
 from physics.utils import clamp01, angle_diff, rescale_components
 from physics.combustion import CombustionModel
@@ -47,6 +73,58 @@ def _set_m_cr(self, value):
     self.m_air_cr = value - self.m_fuel_cr - self.m_residual_cr
 EnginePhysics.m_cr = property(lambda self: self.m_air_cr + self.m_fuel_cr + self.m_residual_cr, _set_m_cr)
 
+# Cylinder state properties for backward compatibility (primary cylinder)
+def _T_cyl_compat(self):
+    return self.cylinders[0].T_cyl if self.cylinders else T_ATM
+
+def _m_air_cyl_compat(self):
+    return self.cylinders[0].m_air if self.cylinders else 0.0
+
+def _m_fuel_cyl_compat(self):
+    return self.cylinders[0].m_fuel if self.cylinders else 0.0
+
+def _m_burned_cyl_compat(self):
+    return self.cylinders[0].m_burned if self.cylinders else 0.0
+
+def _burn_fraction_compat(self):
+    return self.cylinders[0].burn_fraction if self.cylinders else 0.0
+
+def _combustion_active_compat(self):
+    return self.cylinders[0].combustion_active if self.cylinders else False
+
+def _spark_active_compat(self):
+    return self.cylinders[0].spark_active if self.cylinders else False
+
+def _lambda_value_compat(self):
+    return self.cylinders[0].lambda_value if self.cylinders else 1.0
+
+def _p_cyl_compat(self):
+    return self.cylinders[0].p_cyl if self.cylinders else P_ATM
+
+# Attach properties to EnginePhysics class using property() function
+EnginePhysics.T_cyl = property(_T_cyl_compat)
+EnginePhysics.m_air_cyl = property(_m_air_cyl_compat)
+EnginePhysics.m_fuel_cyl = property(_m_fuel_cyl_compat)
+EnginePhysics.m_burned_cyl = property(_m_burned_cyl_compat)
+EnginePhysics.burn_fraction = property(_burn_fraction_compat)
+EnginePhysics.combustion_active = property(_combustion_active_compat)
+EnginePhysics.spark_active = property(_spark_active_compat)
+EnginePhysics.lambda_value = property(_lambda_value_compat)
+EnginePhysics.p_cyl = property(_p_cyl_compat)
+
+# Method for backward compatibility
+EnginePhysics.throttle_flow_factor = lambda self: self._throttle_flow_factor()
+EnginePhysics.idle_circuit_strength = lambda self: self._idle_circuit_strength()
+
+# Fuel film property
+@property
+def _fuel_film_cyl_compat(self):
+    return self.cylinders[0].fuel_film if self.cylinders else 0.0
+EnginePhysics.fuel_film_cyl = _fuel_film_cyl_compat
+
+# Pipe resonance frequency
+EnginePhysics.pipe_resonance_freq = PIPE_RESONANCE_FREQ_HZ
+
 # Backwards compatibility exports
 flow_function = Thermodynamics.flow_function
 mass_flow = Thermodynamics.mass_flow
@@ -54,6 +132,8 @@ mass_flow = Thermodynamics.mass_flow
 __all__ = [
     "EnginePhysics",
     "EngineSnapshot",
+    "Cylinder",
+    "CylinderState",
     "SliderCrankKinematics",
     "KinematicState",
     "FlowCalculator",
@@ -69,5 +149,29 @@ __all__ = [
     "MIN_PRESSURE",
     "T_ATM",
     "GAMMA",
+    "R_GAS",
+    "P_ATM",
+    "C_V",
+    "C_P",
+    "STOICH_AFR",
+    "FUEL_LHV",
+    "MIN_CRANKCASE_PRESSURE",
+    "MAX_CRANKCASE_PRESSURE",
+    "DISCHARGE_COEF_EXHAUST",
+    "DISCHARGE_COEF_TRANSFER",
+    "DISCHARGE_COEF_INTAKE_MAIN",
+    "DISCHARGE_COEF_INTAKE_IDLE",
+    "EXHAUST_PORT_OPEN_M",
+    "TRANSFER_PORT_OPEN_M",
+    "EXHAUST_PORT_WIDTH_M",
+    "TRANSFER_PORT_WIDTH_M",
+    "PISTON_AREA_M2",
+    "HALF_STROKE_M",
+    "CON_ROD_M",
+    "CLEARANCE_VOLUME_M3",
+    "CRANKCASE_VOLUME_M3",
+    "BORE_M",
+    "STROKE_M",
+    "DISPLACEMENT_M3",
     "clamp01",
 ]

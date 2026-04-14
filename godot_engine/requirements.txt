@@ -1,0 +1,15 @@
+# 2-Stroke Engine v3.0 - Python Dependencies
+# Install with: pip install -r requirements.txt
+
+# Core simulation (from parent project)
+# These are in the parent directory:
+# - physics (custom module)
+# - particles (custom module)
+
+# Godot integration is handled by Godot's GDExtension system
+# See: https://github.com/touilleMan/godot-python
+
+# Development dependencies (optional)
+# pytest>=7.0.0
+# black>=22.0.0
+# mypy>=0.950

@@ -2,7 +2,7 @@ from collections import deque
 
 import pygame
 
-from config import WINDOW
+from config import WINDOW, QualityPreset, get_quality_preset, TuningPreset, apply_tuning_preset, save_tuning_preset
 from particles import spawn_particles, update_particles
 from physics import EnginePhysics
 from renderer import EngineRenderer
@@ -38,6 +38,14 @@ class EngineApp:
         self._physics_accumulator = 0.0
         self._starter_pressed = False
         self.state = self.engine.snapshot()
+        self._current_preset = QualityPreset.SIMPLE_2D
+        self._presets = [
+            QualityPreset.SIMPLE_2D,
+            QualityPreset.LOW,
+            QualityPreset.MEDIUM,
+            QualityPreset.HIGH,
+            QualityPreset.ULTRA,
+        ]
 
     def handle_event(self, event: pygame.event.Event) -> None:
         if event.type == pygame.QUIT:
@@ -68,9 +76,95 @@ class EngineApp:
                 self.engine.fuel_cutoff = not self.engine.fuel_cutoff
             elif event.key == pygame.K_s:
                 self._starter_pressed = True
+            elif event.key == pygame.K_F1:
+                self._cycle_preset(0)
+            elif event.key == pygame.K_F2:
+                self._cycle_preset(1)
+            elif event.key == pygame.K_F3:
+                self._cycle_preset(2)
+            elif event.key == pygame.K_F4:
+                self._cycle_preset(3)
+            elif event.key == pygame.K_F5:
+                self._cycle_preset(4)
+            # Tuning presets (1-5)
+            elif event.key == pygame.K_1:
+                apply_tuning_preset(self.engine, TuningPreset.STOCK)
+                print(f"Tuning: Stock")
+            elif event.key == pygame.K_2:
+                apply_tuning_preset(self.engine, TuningPreset.GATTRIM)
+                print(f"Tuning: Gattrim")
+            elif event.key == pygame.K_3:
+                apply_tuning_preset(self.engine, TuningPreset.RACING)
+                print(f"Tuning: Racing")
+            elif event.key == pygame.K_4:
+                apply_tuning_preset(self.engine, TuningPreset.CLASSIC)
+                print(f"Tuning: Classic")
+            elif event.key == pygame.K_5:
+                apply_tuning_preset(self.engine, TuningPreset.DRAGRACE)
+                print(f"Tuning: Dragrace")
+            # Nya trimningsparametrar
+            elif event.key == pygame.K_6:
+                # Justera kompression
+                self.engine.compression_ratio = min(10.0, self.engine.compression_ratio + 0.5)
+                print(f"Compression: {self.engine.compression_ratio:.1f}:1")
+            elif event.key == pygame.K_7:
+                self.engine.compression_ratio = max(6.0, self.engine.compression_ratio - 0.5)
+                print(f"Compression: {self.engine.compression_ratio:.1f}:1")
+            elif event.key == pygame.K_8:
+                # Justera avgaspipa resonans
+                self.engine.pipe_resonance_freq = min(200.0, self.engine.pipe_resonance_freq + 10.0)
+                print(f"Pipe freq: {self.engine.pipe_resonance_freq:.0f} Hz")
+            elif event.key == pygame.K_9:
+                self.engine.pipe_resonance_freq = max(80.0, self.engine.pipe_resonance_freq - 10.0)
+                print(f"Pipe freq: {self.engine.pipe_resonance_freq:.0f} Hz")
+            elif event.key == pygame.K_0:
+                # Spara nuvarande inställningar
+                save_tuning_preset(self.engine, "my_tune")
+                print("Sparade inställningar till my_tune.json")
+            # Fler parametrar med Shift
+            elif event.key == pygame.K_MINUS and pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                self.engine.stroke_multiplier = max(0.8, self.engine.stroke_multiplier - 0.05)
+                print(f"Stroke: {self.engine.stroke_multiplier:.2f}")
+            elif event.key == pygame.K_EQUALS and pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                self.engine.stroke_multiplier = min(1.2, self.engine.stroke_multiplier + 0.05)
+                print(f"Stroke: {self.engine.stroke_multiplier:.2f}")
+            elif event.key == pygame.K_LEFTBRACKET:
+                self.engine.transfer_port_height = max(0.025, self.engine.transfer_port_height - 0.002)
+                print(f"Transfer port: {self.engine.transfer_port_height:.3f}m")
+            elif event.key == pygame.K_RIGHTBRACKET:
+                self.engine.transfer_port_height = min(0.045, self.engine.transfer_port_height + 0.002)
+                print(f"Transfer port: {self.engine.transfer_port_height:.3f}m")
+            elif event.key == pygame.K_SEMICOLON:
+                self.engine.exhaust_port_height = max(0.018, self.engine.exhaust_port_height - 0.002)
+                print(f"Exhaust port: {self.engine.exhaust_port_height:.3f}m")
+            elif event.key == pygame.K_QUOTE:
+                self.engine.exhaust_port_height = min(0.035, self.engine.exhaust_port_height + 0.002)
+                print(f"Exhaust port: {self.engine.exhaust_port_height:.3f}m")
+            elif event.key == pygame.K_COMMA:
+                self.engine.reed_stiffness = max(800.0, self.engine.reed_stiffness - 100.0)
+                print(f"Reed stiffness: {self.engine.reed_stiffness:.0f}")
+            elif event.key == pygame.K_PERIOD:
+                self.engine.reed_stiffness = min(2000.0, self.engine.reed_stiffness + 100.0)
+                print(f"Reed stiffness: {self.engine.reed_stiffness:.0f}")
+            elif event.key == pygame.K_SLASH:
+                self.engine.inertia_multiplier = max(0.6, self.engine.inertia_multiplier - 0.1)
+                print(f"Inertia: {self.engine.inertia_multiplier:.1f}")
+            elif event.key == pygame.K_BACKSLASH:
+                self.engine.inertia_multiplier = min(1.5, self.engine.inertia_multiplier + 0.1)
+                print(f"Inertia: {self.engine.inertia_multiplier:.1f}")
         elif event.type == pygame.KEYUP:
             if event.key == pygame.K_s:
                 self._starter_pressed = False
+
+    def _cycle_preset(self, index: int) -> None:
+        """Switch to a different rendering quality preset."""
+        if 0 <= index < len(self._presets):
+            self._current_preset = self._presets[index]
+            new_config = get_quality_preset(self._current_preset)
+            global RENDER
+            RENDER = new_config
+            self.renderer = EngineRenderer(self.engine)
+            print(f"Rendering preset: {self._current_preset.value}")
 
     def update(self, raw_dt: float) -> None:
         if self.paused:
@@ -89,7 +183,8 @@ class EngineApp:
         self.pv_cr_points.append((v_cr_cc, self.state.p_cr / 100000.0))
 
     def render(self) -> None:
-        self.renderer.draw(self.screen, self.state, self.particles, self.pv_cyl_points, self.pv_cr_points)
+        dt = self.clock.get_time() / 1000.0
+        self.renderer.draw(self.screen, self.state, self.particles, self.pv_cyl_points, self.pv_cr_points, dt)
         pygame.display.flip()
 
     def run(self) -> None:

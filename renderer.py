@@ -1,8 +1,12 @@
 from collections import deque
 import math
 import pygame
-from config import RENDER
+from config import RENDER, WINDOW
 from physics.utils import clamp01
+from rendering.bloom import BloomProcessor
+from rendering.materials import MaterialCache
+from rendering.animations import AnimationManager
+from rendering.gauges import create_default_dashboard
 
 
 def color_rgb(r: float, g: float, b: float) -> tuple[int, int, int]:
@@ -40,9 +44,71 @@ class EngineRenderer:
         # Guard against zero A_p (piston area)
         piston_area = max(engine.A_p, 1e-9)
         self.clearance_height_px = engine.V_c / piston_area * RENDER.scale
+        
+        # v2.1 Rendering systems
+        self._init_hd_render_target()
+        self._init_bloom()
+        self._init_materials()
+        self._init_animations()
+    
+    def _init_hd_render_target(self) -> None:
+        """Initialize HD render target for high-quality rendering."""
+        if RENDER.enable_hd_render:
+            scale = RENDER.hd_render_scale
+            self.hd_width = int(WINDOW.width * scale)
+            self.hd_height = int(WINDOW.height * scale)
+            self.hd_surface = pygame.Surface((self.hd_width, self.hd_height), pygame.SRCALPHA)
+        else:
+            self.hd_surface = None
+    
+    def _init_bloom(self) -> None:
+        """Initialize bloom post-processing."""
+        if RENDER.enable_bloom:
+            size = (self.hd_width if self.hd_surface else WINDOW.width,
+                    self.hd_height if self.hd_surface else WINDOW.height)
+            self.bloom_processor = BloomProcessor(size, RENDER.bloom_quality)
+            self.bloom_processor.set_threshold(RENDER.bloom_threshold)
+            self.bloom_processor.set_intensity(RENDER.bloom_intensity)
+            self.bloom_processor.set_sigma(RENDER.bloom_sigma)
+        else:
+            self.bloom_processor = None
+    
+    def _init_materials(self) -> None:
+        """Initialize material texture cache."""
+        if RENDER.enable_materials:
+            self.material_cache = MaterialCache()
+        else:
+            self.material_cache = None
+    
+    def _init_animations(self) -> None:
+        """Initialize animation manager."""
+        if RENDER.enable_animations:
+            self.animation_manager = AnimationManager()
+        else:
+            self.animation_manager = None
+        
+        # Initialize dashboard if enabled
+        if RENDER.enable_dashboard:
+            self.dashboard = create_default_dashboard(900, 660)
+        else:
+            self.dashboard = None
 
-    def draw(self, screen: pygame.Surface, state, particles, pv_cyl_points: deque, pv_cr_points: deque) -> None:
-        screen.fill(RENDER.background_color)
+    def draw(self, screen: pygame.Surface, state, particles, pv_cyl_points: deque, pv_cr_points: deque, dt: float = 1.0) -> None:
+        # Determine render target (HD or native)
+        render_surface = self.hd_surface if self.hd_surface else screen
+        render_surface.fill(RENDER.background_color)
+        
+        # Update animations
+        if self.animation_manager:
+            self.animation_manager.update(
+                state, state.rpm, state.p_cyl, state.p_cr,
+                self.engine.reed_opening, self.engine.combustion_active, dt=dt
+            )
+        
+        # Apply animation offset
+        offset_x, offset_y = 0, 0
+        if self.animation_manager:
+            offset_x, offset_y = self.animation_manager.get_total_offset()
         cyl_w = self.engine.B * RENDER.scale
         cyl_h = 2 * self.engine.R * RENDER.scale + 40
         cyl_left = RENDER.crank_x - cyl_w / 2
@@ -83,7 +149,7 @@ class EngineRenderer:
         ]
         exhaust_window = pygame.Rect(cyl_rect.right - 8, int(exh_y + 6), 14, max(16, int(self.engine.w_exh * RENDER.scale - 12)))
         transfer_window = pygame.Rect(cyl_rect.left - 6, int(tr_y + 6), 12, max(16, int(self.engine.w_tr * RENDER.scale - 10)))
-        structure_surface = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
+        structure_surface = pygame.Surface(render_surface.get_size(), pygame.SRCALPHA)
         cylinder_shell_color = (*color_rgb(180 + 36 * pulse_intensity, 180 + 22 * pulse_intensity, 210 + 8 * pulse_intensity), 100 + int(60 * pulse_intensity))
         head_color = (*color_rgb(95 + 125 * pulse_intensity, 95 + 55 * pulse_intensity, 118 + 10 * pulse_intensity), 220)
         pygame.draw.rect(structure_surface, cylinder_shell_color, cyl_rect, border_radius=10)
@@ -98,9 +164,9 @@ class EngineRenderer:
         pygame.draw.rect(structure_surface, (32, 28, 38, 255), chamber_rect, border_radius=8)
         pygame.draw.rect(structure_surface, exh_col, exhaust_window, border_radius=5)
         pygame.draw.rect(structure_surface, trans_col, transfer_window, border_radius=5)
-        screen.blit(structure_surface, (0, 0))
+        render_surface.blit(structure_surface, (0, 0))
         if pulse_intensity > 0.03:
-            pulse_surface = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
+            pulse_surface = pygame.Surface(render_surface.get_size(), pygame.SRCALPHA)
             for inflate_px, alpha_scale in ((6, 0.16), (12, 0.11), (18, 0.07)):
                 pulse_rect = cyl_rect.inflate(inflate_px, inflate_px)
                 pulse_head = head_rect.inflate(inflate_px + 8, inflate_px)
@@ -108,22 +174,22 @@ class EngineRenderer:
                 pulse_color = (*core_flame, pulse_alpha)
                 pygame.draw.rect(pulse_surface, pulse_color, pulse_rect, width=3, border_radius=12)
                 pygame.draw.rect(pulse_surface, pulse_color, pulse_head, width=3, border_radius=12)
-            screen.blit(pulse_surface, (0, 0))
-        pygame.draw.rect(screen, color_rgb(112 + 110 * pulse_intensity, 112 + 45 * pulse_intensity, 138 + 12 * pulse_intensity), cyl_rect, width=4, border_radius=10)
-        pygame.draw.rect(screen, color_rgb(130 + 95 * pulse_intensity, 130 + 48 * pulse_intensity, 150 + 8 * pulse_intensity), head_rect, width=3, border_radius=10)
-        pygame.draw.ellipse(screen, (100, 100, 122), crankcase_rect, width=4)
-        pygame.draw.rect(screen, (98, 98, 118), skirt_rect, width=3, border_radius=14)
-        pygame.draw.rect(screen, (108, 76, 76), exhaust_rect, width=3, border_radius=10)
-        pygame.draw.rect(screen, (76, 118, 132), transfer_rect, width=3, border_radius=10)
-        pygame.draw.lines(screen, (76, 118, 132), True, transfer_bridge, 3)
-        pygame.draw.rect(screen, (82, 122, 90), intake_rect, width=3, border_radius=8)
-        pygame.draw.rect(screen, (230, 200, 120), reed_rect, width=2, border_radius=4)
+            render_surface.blit(pulse_surface, (0, 0))
+        pygame.draw.rect(render_surface, color_rgb(112 + 110 * pulse_intensity, 112 + 45 * pulse_intensity, 138 + 12 * pulse_intensity), cyl_rect, width=4, border_radius=10)
+        pygame.draw.rect(render_surface, color_rgb(130 + 95 * pulse_intensity, 130 + 48 * pulse_intensity, 150 + 8 * pulse_intensity), head_rect, width=3, border_radius=10)
+        pygame.draw.ellipse(render_surface, (100, 100, 122), crankcase_rect, width=4)
+        pygame.draw.rect(render_surface, (98, 98, 118), skirt_rect, width=3, border_radius=14)
+        pygame.draw.rect(render_surface, (108, 76, 76), exhaust_rect, width=3, border_radius=10)
+        pygame.draw.rect(render_surface, (76, 118, 132), transfer_rect, width=3, border_radius=10)
+        pygame.draw.lines(render_surface, (76, 118, 132), True, transfer_bridge, 3)
+        pygame.draw.rect(render_surface, (82, 122, 90), intake_rect, width=3, border_radius=8)
+        pygame.draw.rect(render_surface, (230, 200, 120), reed_rect, width=2, border_radius=4)
         spark_body = pygame.Rect(RENDER.crank_x - 10, head_rect.top - 18, 20, 24)
-        pygame.draw.rect(screen, (210, 210, 220), spark_body, border_radius=5)
-        pygame.draw.line(screen, (240, 240, 245), (RENDER.crank_x, spark_body.bottom), (RENDER.crank_x, chamber_rect.top + 2), 4)
+        pygame.draw.rect(render_surface, (210, 210, 220), spark_body, border_radius=5)
+        pygame.draw.line(render_surface, (240, 240, 245), (RENDER.crank_x, spark_body.bottom), (RENDER.crank_x, chamber_rect.top + 2), 4)
         glow_intensity = max(burn_intensity, pressure_intensity * 0.8, temperature_intensity * 0.75)
         if glow_intensity > 0.01:
-            combustion_surface = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
+            combustion_surface = pygame.Surface(render_surface.get_size(), pygame.SRCALPHA)
             chamber_center = (RENDER.crank_x, chamber_rect.centery + 2)
             max_radius = max(18, int(cyl_w * (0.18 + 0.30 * glow_intensity)))
             for radius_scale, alpha_scale, color in (
@@ -138,16 +204,16 @@ class EngineRenderer:
             flame_height = max(12, int((piston_y_for_glow - chamber_rect.bottom) * (0.18 + 0.55 * glow_intensity)))
             flame_rect = pygame.Rect(int(cyl_left + 6), chamber_rect.bottom - 2, int(cyl_w - 12), flame_height)
             pygame.draw.ellipse(combustion_surface, (*mid_flame, int(120 * glow_intensity)), flame_rect)
-            screen.blit(combustion_surface, (0, 0))
+            render_surface.blit(combustion_surface, (0, 0))
         if self.engine.spark_active:
-            pygame.draw.circle(screen, (255, 255, 150), (RENDER.crank_x, chamber_rect.centery), 18)
+            pygame.draw.circle(render_surface, (255, 255, 150), (RENDER.crank_x, chamber_rect.centery), 18)
         if glow_intensity > 0.04:
             flame_kernel_radius = max(10, int(10 + burn_intensity * 34 + pressure_intensity * 12))
             flame_kernel_center = (RENDER.crank_x, chamber_rect.centery + int(6 + state.x * RENDER.scale * 0.08))
-            pygame.draw.circle(screen, core_flame, flame_kernel_center, flame_kernel_radius)
-            pygame.draw.circle(screen, mid_flame, flame_kernel_center, max(5, int(flame_kernel_radius * 0.62)))
+            pygame.draw.circle(render_surface, core_flame, flame_kernel_center, flame_kernel_radius)
+            pygame.draw.circle(render_surface, mid_flame, flame_kernel_center, max(5, int(flame_kernel_radius * 0.62)))
         if afterburn_intensity > 0.04:
-            exhaust_surface = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
+            exhaust_surface = pygame.Surface(render_surface.get_size(), pygame.SRCALPHA)
             flame_length = int(55 + 130 * afterburn_intensity + 20 * exhaust_intensity)
             flame_center_y = exhaust_rect.centery + int(math.sin(self.engine.theta * 2.0) * 4)
             outer_rect = pygame.Rect(exhaust_rect.right - 8, flame_center_y - 18, flame_length, 36)
@@ -156,18 +222,18 @@ class EngineRenderer:
             pygame.draw.ellipse(exhaust_surface, (*outer_exhaust, int(140 * afterburn_intensity)), outer_rect)
             pygame.draw.ellipse(exhaust_surface, (*mid_exhaust, int(180 * afterburn_intensity)), mid_rect)
             pygame.draw.ellipse(exhaust_surface, (*core_exhaust, int(210 * afterburn_intensity)), core_rect)
-            screen.blit(exhaust_surface, (0, 0))
+            render_surface.blit(exhaust_surface, (0, 0))
         piston_y = self.cylinder_y + self.clearance_height_px + state.x * RENDER.scale
         piston_rect = pygame.Rect(int(cyl_left + 2), int(piston_y), int(cyl_w - 4), int(RENDER.piston_height_px))
-        pygame.draw.rect(screen, RENDER.piston_color, piston_rect, border_radius=3)
+        pygame.draw.rect(render_surface, RENDER.piston_color, piston_rect, border_radius=3)
         crank_x = RENDER.crank_x + math.sin(self.engine.theta) * self.engine.R * RENDER.scale
         crank_y = RENDER.crank_y - math.cos(self.engine.theta) * self.engine.R * RENDER.scale
         piston_pin = (RENDER.crank_x, piston_rect.y + RENDER.piston_height_px / 2)
-        pygame.draw.line(screen, (150, 150, 170), (crank_x, crank_y), piston_pin, 14)
-        pygame.draw.line(screen, (180, 180, 200), (RENDER.crank_x, RENDER.crank_y), (crank_x, crank_y), 20)
-        pygame.draw.circle(screen, (200, 50, 50), (int(crank_x), int(crank_y)), 8)
-        pygame.draw.circle(screen, (50, 50, 50), (int(piston_pin[0]), int(piston_pin[1])), 6)
-        particle_surface = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
+        pygame.draw.line(render_surface, (150, 150, 170), (crank_x, crank_y), piston_pin, 14)
+        pygame.draw.line(render_surface, (180, 180, 200), (RENDER.crank_x, RENDER.crank_y), (crank_x, crank_y), 20)
+        pygame.draw.circle(render_surface, (200, 50, 50), (int(crank_x), int(crank_y)), 8)
+        pygame.draw.circle(render_surface, (50, 50, 50), (int(piston_pin[0]), int(piston_pin[1])), 6)
+        particle_surface = pygame.Surface(render_surface.get_size(), pygame.SRCALPHA)
         # Separate particles into standard and additive blending layers
         additive_particles = []
         standard_particles = []
@@ -191,10 +257,10 @@ class EngineRenderer:
             color = (*particle.color, int(particle.life))
             pygame.draw.circle(particle_surface, color, (int(particle.x), int(particle.y)), int(particle.size))
             
-        screen.blit(particle_surface, (0, 0))
+        render_surface.blit(particle_surface, (0, 0))
         
         if additive_particles:
-            additive_surface = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
+            additive_surface = pygame.Surface(render_surface.get_size(), pygame.SRCALPHA)
             for particle in additive_particles:
                 # Skip particles outside safe bounds
                 if not (safe_left <= particle.x <= safe_right and safe_top <= particle.y <= safe_bottom):
@@ -205,7 +271,7 @@ class EngineRenderer:
                 if particle.life > 150:
                     glow_color = (*particle.color, int(particle.life * 0.3))
                     pygame.draw.circle(additive_surface, glow_color, (int(particle.x), int(particle.y)), int(particle.size * 2.5))
-            screen.blit(additive_surface, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+            render_surface.blit(additive_surface, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
         afr = 1.0 / self.engine.fuel_ratio if self.engine.fuel_ratio > 0 else 0.0
         ignition_status = "PÅ" if self.engine.ignition_enabled else "AV"
         fuel_status = "AV" if self.engine.fuel_cutoff else "PÅ"
@@ -231,14 +297,14 @@ class EngineRenderer:
             f"Avgas: {state.dm_air_exh * 1000:.1f}g luft / {state.dm_fuel_exh * 1000:.2f}g br / {state.dm_burned_exh * 1000:.1f}g rest",
         ]
         for index, text in enumerate(texts):
-            screen.blit(self.font.render(text, True, (220, 220, 230)), (20, 20 + index * 22))
+            render_surface.blit(self.font.render(text, True, (220, 220, 230)), (20, 20 + index * 22))
         # PV-Diagram Cylinder - med clipping och relativ koordinatberäkning
         diag_x, diag_y = 900, 30
         diag_w, diag_h = 350, 280
         diag_rect = (diag_x, diag_y, diag_w, diag_h)
-        pygame.draw.rect(screen, (30, 30, 40), diag_rect, border_radius=8)
-        pygame.draw.rect(screen, (100, 100, 100), diag_rect, width=2, border_radius=8)
-        screen.blit(self.small_font.render("PV-Diagram Cylinder (cc vs Bar)", True, (200, 200, 200)), (diag_x + 10, diag_y + 10))
+        pygame.draw.rect(render_surface, (30, 30, 40), diag_rect, border_radius=8)
+        pygame.draw.rect(render_surface, (100, 100, 100), diag_rect, width=2, border_radius=8)
+        render_surface.blit(self.small_font.render("PV-Diagram Cylinder (cc vs Bar)", True, (200, 200, 200)), (diag_x + 10, diag_y + 10))
         if len(pv_cyl_points) > 2:
             mapped = []
             for volume, pressure in pv_cyl_points:
@@ -253,14 +319,14 @@ class EngineRenderer:
                 py = (diag_y + diag_h - 10) - press_clamped * (diag_h - 20)
                 mapped.append((px, py))
             if len(mapped) > 1:
-                pygame.draw.lines(screen, (255, 120, 120), False, mapped, 2)
+                pygame.draw.lines(render_surface, (255, 120, 120), False, mapped, 2)
         # PV-Diagram Vevhus - med clipping och bättre skalning
         diag2_x, diag2_y = 900, 350
         diag2_w, diag2_h = 350, 280
         diag2_rect = (diag2_x, diag2_y, diag2_w, diag2_h)
-        pygame.draw.rect(screen, (30, 40, 30), diag2_rect, border_radius=8)
-        pygame.draw.rect(screen, (100, 100, 100), diag2_rect, width=2, border_radius=8)
-        screen.blit(self.small_font.render("PV-Diagram Vevhus (cc vs Bar)", True, (200, 200, 200)), (diag2_x + 10, diag2_y + 10))
+        pygame.draw.rect(render_surface, (30, 40, 30), diag2_rect, border_radius=8)
+        pygame.draw.rect(render_surface, (100, 100, 100), diag2_rect, width=2, border_radius=8)
+        render_surface.blit(self.small_font.render("PV-Diagram Vevhus (cc vs Bar)", True, (200, 200, 200)), (diag2_x + 10, diag2_y + 10))
         if len(pv_cr_points) > 2:
             mapped2 = []
             # Bättre tryckskala: 0.5 till 2.0 Bar (mer realistiskt för vevhus)
@@ -278,4 +344,23 @@ class EngineRenderer:
                 py = (diag2_y + diag2_h - 10) - press_clamped * (diag2_h - 20)
                 mapped2.append((px, py))
             if len(mapped2) > 1:
-                pygame.draw.lines(screen, (120, 255, 120), False, mapped2, 2)
+                pygame.draw.lines(render_surface, (120, 255, 120), False, mapped2, 2)
+        
+        # Draw dashboard if enabled
+        if self.dashboard:
+            gauge_values = {
+                "RPM": state.rpm,
+                "Cyl Press": state.p_cyl / 100000.0,  # Convert Pa to Bar
+                "Temp": self.engine.T_cyl
+            }
+            self.dashboard.draw(render_surface, gauge_values, self.small_font)
+        
+        # Apply bloom post-processing
+        if self.bloom_processor:
+            self.bloom_processor.process(render_surface)
+        
+        # Scale down from HD render target to screen
+        if self.hd_surface:
+            pygame.transform.smoothscale(self.hd_surface, (WINDOW.width, WINDOW.height), screen)
+        elif render_surface != screen:
+            screen.blit(render_surface, (0, 0))

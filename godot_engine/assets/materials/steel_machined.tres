@@ -1,0 +1,13 @@
+[gd_resource type="StandardMaterial3D" format=3]
+
+[resource]
+resource_name = "Steel Machined"
+albedo_color = Color(0.55, 0.57, 0.6, 1)
+metallic = 0.85
+metallic_specular = 0.7
+roughness = 0.3
+roughness_texture_channel = 0
+normal_enabled = true
+normal_scale = 0.3
+uv1_scale = Vector3(1, 1, 1)
+uv1_triplanar = true

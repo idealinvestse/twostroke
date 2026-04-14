@@ -51,27 +51,75 @@ class Particle:
     swirl_phase: float = 0.0
     swirl_speed: float = 0.0
     p_type: str = "air"
+    temperature: float = 293.0
+    initial_size: float = 3.0
 
     def __post_init__(self) -> None:
         if self.size == 3.0:
             self.size = random.uniform(1.0, 2.5)
+        self.initial_size = self.size
         self.swirl_phase = random.uniform(0.0, math.pi * 2)
         self.swirl_speed = random.uniform(0.03, 0.1)
+        if self.p_type in ("flame", "spark"):
+            self.temperature = random.uniform(1200.0, 2000.0)
+        elif self.p_type == "fuel":
+            self.temperature = random.uniform(293.0, 450.0)
 
-    def update(self) -> None:
+    def update(self, engine_temp: float = 293.0) -> None:
         # Add micro-turbulence (reduced for more fluid movement)
         self.swirl_phase += self.swirl_speed
         turb_x = math.sin(self.swirl_phase) * 0.1
         turb_y = math.cos(self.swirl_phase) * 0.1
         
+        # v2.1: Turbulence-dependent movement (more chaotic at higher velocities)
+        speed = math.hypot(self.vx, self.vy)
+        if speed > 5.0:
+            turb_scale = min(2.0, speed / 10.0)
+            turb_x *= turb_scale
+            turb_y *= turb_scale
+        
         # Air drag (increased for more realistic deceleration)
-        drag = 0.94 if self.region != "cylinder" else 0.96
+        # Size-dependent drag: smaller particles experience more drag
+        size_factor = max(0.5, min(1.5, 2.0 / max(self.size, 0.1)))
+        base_drag = 0.94 if self.region != "cylinder" else 0.96
+        drag = base_drag ** size_factor
         self.vx *= drag
         self.vy *= drag
+        
+        # Temperature-based buoyancy (hot particles rise)
+        if self.temperature > 400.0:
+            buoyancy = (self.temperature - 400.0) / 1600.0 * 0.15
+            self.vy -= buoyancy
+        
+        # Thermophoresis: particles move away from hot areas
+        if self.p_type not in ("flame", "spark") and engine_temp > 600.0:
+            thermophoretic_strength = (engine_temp - 600.0) / 1200.0 * 0.08
+            if self.region == "cylinder":
+                self.vy -= thermophoretic_strength
         
         # Gravity for fuel droplets (reduced)
         if self.p_type == "fuel":
             self.vy += 0.08
+            # Evaporation: fuel droplets shrink over time
+            if self.initial_size > 0.5:
+                evaporation_rate = 0.003 * (self.temperature - 293.0) / 700.0
+                self.size = max(0.5, self.size - evaporation_rate)
+                if self.size < self.initial_size * 0.3:
+                    self.p_type = "vapor"
+                    self.color = (180, 180, 200)
+        
+        # v2.1: Sparks decay faster and have different physics
+        if self.p_type == "spark":
+            self.life -= self.fade_speed * 2.0  # Faster decay
+            self.vy += 0.15  # More gravity
+            self.temperature = max(293.0, self.temperature - 25.0)
+        
+        # Flame particles cool down over time
+        if self.p_type == "flame":
+            self.temperature = max(293.0, self.temperature - 15.0)
+            # Size shrinks as flame cools
+            temp_ratio = (self.temperature - 293.0) / 1707.0
+            self.size = self.initial_size * (0.3 + 0.7 * temp_ratio)
         
         self.x += self.vx + turb_x
         self.y += self.vy + turb_y
@@ -87,13 +135,23 @@ def spawn_particles(particles: list[Particle], state, engine, cylinder_y: float)
     exhaust_intensity = max(0.0, min(1.0, state.dm_exh / 0.18))
     afterburn_fuel = clamp01((1.02 - lambda_value) / 0.35)
     afterburn_timing = clamp01(retard_deg / 22.0)
-    afterburn_intensity = clamp01((0.65 * afterburn_fuel + 0.45 * afterburn_timing) * (0.35 + 0.65 * exhaust_intensity))
+    temperature_intensity = clamp01((engine.T_cyl - 450.0) / 1800.0)
+    afterburn_intensity = clamp01((0.65 * afterburn_fuel + 0.45 * afterburn_timing) * (0.35 + 0.65 * exhaust_intensity) * (0.35 + 0.65 * temperature_intensity))
     outer_flame, mid_flame, core_flame = combustion_particle_colors(lambda_value, engine.T_cyl, burn_phase)
     outer_exhaust, mid_exhaust, core_exhaust = combustion_particle_colors(max(0.72, lambda_value * 0.92), engine.T_cyl * 0.9, 0.45 + 0.55 * burn_phase)
     
+    # v2.1: Temperature-based color gradation for air/fuel particles
+    def temp_based_color(base_color: tuple[int, int, int], temp: float) -> tuple[int, int, int]:
+        """Adjust color based on temperature (blue cold → red hot)."""
+        temp_norm = clamp01((temp - 293.0) / 1000.0)  # 293K-1293K range
+        r, g, b = base_color
+        # Shift towards red at high temperature
+        r = min(255, int(r + 50 * temp_norm))
+        g = max(0, int(g - 30 * temp_norm))
+        b = max(0, int(b - 50 * temp_norm))
+        return (r, g, b)
+    
     crankcase_top = RENDER.crank_y - engine.R * RENDER.scale + 6
-    crankcase_bottom = crankcase_top + engine.R * RENDER.scale * 1.95 + 70
-    crankcase_centery = crankcase_top + (crankcase_bottom - crankcase_top) / 2
 
     if state.dm_exh > 0 and random.random() < state.dm_exh * 0.002 * 40000:
         exh_y = cylinder_y + engine.x_exh * RENDER.scale + 6
@@ -107,7 +165,8 @@ def spawn_particles(particles: list[Particle], state, engine, cylinder_y: float)
                     vy=random.uniform(-3, 3),
                     region="exhaust",
                     fade_speed=random.uniform(2.0, 5.0),
-                    p_type="exhaust"
+                    p_type="exhaust",
+                    temperature=random.uniform(500.0, 800.0)
                 )
             )
     elif state.dm_exh < 0 and random.random() < abs(state.dm_exh) * 0.002 * 40000:
@@ -122,7 +181,8 @@ def spawn_particles(particles: list[Particle], state, engine, cylinder_y: float)
                     vy=random.uniform(-3, 3),
                     region="exhaust",
                     fade_speed=random.uniform(2.0, 5.0),
-                    p_type="exhaust"
+                    p_type="exhaust",
+                    temperature=random.uniform(400.0, 700.0)
                 )
             )
     if engine.spark_active or burn_intensity > 0.02:
@@ -132,8 +192,33 @@ def spawn_particles(particles: list[Particle], state, engine, cylinder_y: float)
         piston_y = cylinder_y + engine.V_c / piston_area * RENDER.scale + state.x * RENDER.scale
         chamber_top = cylinder_y
         chamber_bottom = max(chamber_top + 10, piston_y - 15)
+        
+        # v2.1: Add sparks at ignition
+        if engine.spark_active:
+            spark_count = 3 + int(5 * pressure_intensity)
+            for _ in range(spark_count):
+                particles.append(
+                    Particle(
+                        x=RENDER.crank_x + random.uniform(-5, 5),
+                        y=chamber_top + random.uniform(0, 10),
+                        color=(255, 255, 200),
+                        vx=random.uniform(-15.0, 15.0),
+                        vy=random.uniform(-10.0, 5.0),
+                        fade_speed=random.uniform(15.0, 25.0),
+                        life=random.uniform(80.0, 150.0),
+                        size=random.uniform(1.0, 2.0),
+                        region="cylinder",
+                        p_type="spark",
+                        temperature=random.uniform(1800.0, 2500.0)
+                    )
+                )
+        
         for _ in range(flame_count):
             flame_color = random.choice((outer_flame, mid_flame, core_flame))
+            # v2.1: Temperature-based lifetime
+            temp_factor = (engine.T_cyl - 450.0) / 1800.0  # 0-1 based on temp
+            fade_speed_adj = random.uniform(5.0, 12.0) * (1.0 - 0.3 * temp_factor)  # Slower fade at high temp
+            flame_temp = random.uniform(1200.0, 2000.0) * (0.7 + 0.3 * temp_factor)
             particles.append(
                 Particle(
                     x=RENDER.crank_x + random.uniform(-engine.B * RENDER.scale * 0.25, engine.B * RENDER.scale * 0.25),
@@ -141,11 +226,12 @@ def spawn_particles(particles: list[Particle], state, engine, cylinder_y: float)
                     color=flame_color,
                     vx=random.uniform(-8.0, 8.0) * (0.5 + burn_intensity),
                     vy=random.uniform(-1.0, 12.0) * (0.4 + pressure_intensity),
-                    fade_speed=random.uniform(5.0, 12.0),
+                    fade_speed=fade_speed_adj,
                     life=random.uniform(180.0, 255.0),
                     size=random.uniform(2.0, 4.0),
                     region="cylinder",
-                    p_type="flame"
+                    p_type="flame",
+                    temperature=flame_temp
                 )
             )
     if afterburn_intensity > 0.04 and state.dm_exh > 0:
@@ -164,38 +250,49 @@ def spawn_particles(particles: list[Particle], state, engine, cylinder_y: float)
                     life=random.uniform(150.0, 255.0),
                     size=random.uniform(2.5, 4.5),
                     region="exhaust",
-                    p_type="flame"
+                    p_type="flame",
+                    temperature=random.uniform(1000.0, 1500.0)
                 )
             )
     if state.dm_tr > 0 and random.random() < state.dm_tr * 0.002 * 40000:
         crankcase_y = crankcase_top + random.uniform(20, 80)
         for _ in range(random.randint(1, 4)):
             is_fuel = random.random() < 0.3
+            base_color = (50, 255, 100) if is_fuel else (200, 220, 255)
+            # v2.1: Apply temperature-based color
+            color = temp_based_color(base_color, engine.T_cyl)
+            particle_temp = random.uniform(320.0, 450.0) if is_fuel else random.uniform(293.0, 350.0)
             particles.append(
                 Particle(
                     x=RENDER.crank_x - engine.B / 2 * RENDER.scale - random.uniform(10, 35),
                     y=crankcase_y + random.uniform(-10, 10),
-                    color=(50, 255, 100) if is_fuel else (200, 220, 255),
+                    color=color,
                     vx=random.uniform(1.5, 6),
                     vy=random.uniform(-12, -5),
                     region="crankcase",
                     fade_speed=random.uniform(1.5, 4.0),
-                    p_type="fuel" if is_fuel else "air"
+                    p_type="fuel" if is_fuel else "air",
+                    temperature=particle_temp
                 )
             )
     if state.dm_in > 0 and random.random() < state.dm_in * 0.002 * 20000:
         for _ in range(random.randint(1, 3)):
             is_fuel = random.random() < 0.3
+            base_color = (50, 255, 100) if is_fuel else (200, 220, 255)
+            # v2.1: Apply temperature-based color
+            color = temp_based_color(base_color, engine.T_cyl)
+            particle_temp = random.uniform(293.0, 350.0)
             particles.append(
                 Particle(
-                    x=RENDER.crank_x - 140,
-                    y=crankcase_centery + random.uniform(-15, 15),
-                    color=(50, 255, 100) if is_fuel else (200, 220, 255),
-                    vx=random.uniform(8, 18),
-                    vy=random.uniform(-2, 2),
+                    x=RENDER.crank_x - engine.B / 2 * RENDER.scale - 50,
+                    y=cylinder_y - random.uniform(20, 60),
+                    color=color,
+                    vx=random.uniform(2, 8),
+                    vy=random.uniform(-5, -2),
                     region="intake",
-                    fade_speed=random.uniform(1.5, 4.0),
-                    p_type="fuel" if is_fuel else "air"
+                    fade_speed=random.uniform(2.0, 5.0),
+                    p_type="fuel" if is_fuel else "air",
+                    temperature=particle_temp
                 )
             )
 
@@ -233,7 +330,7 @@ def update_particles(particles: list[Particle], state, engine, cylinder_y: float
     transfer_left = cyl_left - 54
 
     for particle in particles:
-        particle.update()
+        particle.update(engine.T_cyl)
         
         if particle.region == "intake":
             if particle.x > crankcase_left:
@@ -343,17 +440,27 @@ def update_particles(particles: list[Particle], state, engine, cylinder_y: float
                         particle.p_type = "exhaust"
                         particle.color = (100, 100, 100)
 
-            # Loop scavenging simulation
+            # Loop scavenging simulation with vorticity
             if state.dm_tr > 0 and particle.p_type != "flame":
                 center_x = (cyl_left + cyl_right) / 2
                 center_y = (head_y + piston_y) / 2
                 rx = particle.x - center_x
                 ry = particle.y - center_y
                 dist = math.hypot(rx, ry) + 1.0
+                
+                # Primary swirl flow
                 flow_strength = state.dm_tr * 250.0 / dist
                 particle.vx += (-ry / dist) * flow_strength
                 particle.vy += (rx / dist) * flow_strength
                 
+                # Secondary: transfer port jet with turbulent mixing
+                if particle.y > tr_top and particle.y < tr_top + 40:
+                    jet_strength = state.dm_tr * 0.15
+                    particle.vx += jet_strength * (1.0 + random.uniform(-0.3, 0.3))
+                    # Turbulent dispersion
+                    particle.vy += random.uniform(-0.8, 0.8) * jet_strength
+                    
+            # Exhaust flow with expansion
             if state.dm_exh > 0 and particle.y > exh_top and particle.y < piston_y:
                 dx = cyl_right + 10 - particle.x
                 dy = (exh_top + exh_bottom) / 2 - particle.y
@@ -362,6 +469,12 @@ def update_particles(particles: list[Particle], state, engine, cylinder_y: float
                 particle.vx += (dx / dist) * pull
                 particle.vy += (dy / dist) * pull
                 
+                # Gas expansion near exhaust port
+                if particle.x > cyl_right - 20:
+                    expansion = state.dm_exh * 0.08
+                    particle.vx += expansion * (1.0 + random.uniform(-0.2, 0.2))
+                    
+            # Reverse scavenging (exhaust port open during transfer)
             if state.dm_tr < 0 and particle.y > tr_top and particle.y < piston_y:
                 dx = cyl_left - 10 - particle.x
                 dy = (tr_top + tr_bottom) / 2 - particle.y
@@ -369,6 +482,12 @@ def update_particles(particles: list[Particle], state, engine, cylinder_y: float
                 pull = -state.dm_tr * 200.0 / dist
                 particle.vx += (dx / dist) * pull
                 particle.vy += (dy / dist) * pull
+                
+            # Turbulent mixing in cylinder during combustion
+            if engine.combustion_active and engine.burn_fraction > 0.1:
+                turbulence = engine.burn_fraction * 0.5
+                particle.vx += random.uniform(-turbulence, turbulence)
+                particle.vy += random.uniform(-turbulence, turbulence)
 
             pad = particle.size * 1.8
             if particle.x < cyl_left + pad:

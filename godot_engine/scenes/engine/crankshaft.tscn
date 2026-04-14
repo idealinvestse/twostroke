@@ -1,0 +1,69 @@
+[gd_scene load_steps=6 format=3]
+
+[ext_resource type="Material" path="res://assets/materials/steel_machined.tres" id="1_steel"]
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_main_journal"]
+resource_name = "Main Journal"
+top_radius = 0.06
+bottom_radius = 0.06
+height = 0.25
+radial_segments = 32
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_crank_pin"]
+resource_name = "Crank Pin"
+top_radius = 0.05
+bottom_radius = 0.05
+height = 0.2
+radial_segments = 32
+
+[sub_resource type="BoxMesh" id="BoxMesh_web"]
+resource_name = "Crank Web"
+size = Vector3(0.12, 0.15, 0.08)
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_counterweight"]
+resource_name = "Counterweight"
+top_radius = 0.1
+bottom_radius = 0.08
+height = 0.12
+radial_segments = 32
+
+[node name="Crankshaft" type="Node3D"]
+
+; Main bearing journals
+[node name="MainJournal1" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0, -1, 0, 1, 0, -0.3, 0, 0)
+mesh = SubResource("CylinderMesh_main_journal")
+surface_material_override/0 = ExtResource("1_steel")
+
+[node name="MainJournal2" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0, -1, 0, 1, 0, 0.3, 0, 0)
+mesh = SubResource("CylinderMesh_main_journal")
+surface_material_override/0 = ExtResource("1_steel")
+
+; Crank pin (offset for stroke)
+[node name="CrankPin" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0, -1, 0, 1, 0, 0, 0.03, 0)
+mesh = SubResource("CylinderMesh_crank_pin")
+surface_material_override/0 = ExtResource("1_steel")
+
+; Crank webs (connecting pin to main)
+[node name="Web1" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.12, 0.015, 0)
+mesh = SubResource("BoxMesh_web")
+surface_material_override/0 = ExtResource("1_steel")
+
+[node name="Web2" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.12, 0.015, 0)
+mesh = SubResource("BoxMesh_web")
+surface_material_override/0 = ExtResource("1_steel")
+
+; Counterweights
+[node name="Counterweight1" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.15, -0.08, 0)
+mesh = SubResource("CylinderMesh_counterweight")
+surface_material_override/0 = ExtResource("1_steel")
+
+[node name="Counterweight2" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.15, -0.08, 0)
+mesh = SubResource("CylinderMesh_counterweight")
+surface_material_override/0 = ExtResource("1_steel")

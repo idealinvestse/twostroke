@@ -1,0 +1,13 @@
+[gd_resource type="StandardMaterial3D" format=3]
+
+[resource]
+resource_name = "Carbon Fiber Reed"
+albedo_color = Color(0.15, 0.15, 0.15, 1)
+metallic = 0.1
+roughness = 0.2
+roughness_texture_channel = 0
+anisotropy_enabled = true
+anisotropy = 0.8
+emission_enabled = false
+uv1_scale = Vector3(4, 4, 4)
+uv1_triplanar = true

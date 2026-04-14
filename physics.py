@@ -75,10 +75,6 @@ class EnginePhysics:
         self.V_cr_min = self.V_d * 1.8  # Realistic crankcase volume for 2-stroke scavenging
         self.I_engine = 0.008  # Lower inertia for snappier response
         self.friction = 0.65    # Realistic friction for this engine size
-        self.x_exh = 0.024
-        self.x_tr = 0.034
-        self.w_exh = 0.038
-        self.w_tr = 0.032
         self.A_in_max = 0.0012
         self.theta = math.radians(18.0)
         self.omega = 90.0
@@ -89,6 +85,46 @@ class EnginePhysics:
         self.throttle = 1.0
         self.fuel_ratio = 0.068
         self.idle_fuel_trim = 1.0
+
+        # === TRIMMING-PARAMETRAR ===
+        # Dessa kan justeras för att simulera olika trimningsalternativ
+
+        # Motor-geometri
+        self.stroke_multiplier = 1.0  # 0.8-1.2, ändrar slagläge
+        self.bore_multiplier = 1.0    # 0.9-1.15, ändrar borr-diameter
+        self.compression_ratio = 7.5  # 6.0-10.0, kompressionsförhållande
+        self.rod_length = 0.095       # 0.08-0.12, plejlstångslängd
+
+        # Scavenging & portar
+        self.transfer_port_height = 0.034  # 0.025-0.045, överföringsport-höjd
+        self.exhaust_port_height = 0.024   # 0.018-0.035, avgasport-höjd
+        self.exhaust_port_width = 0.038    # 0.030-0.050, avgasport-bredd
+        self.transfer_port_width = 0.032   # 0.025-0.045, överföringsport-bredd
+        self.port_overlap = 0.0           # -5 till +10 grader, port-överlapp
+
+        # Avgassystem (expansion chamber)
+        self.pipe_resonance_freq = 140.0   # 80-200 Hz, resonansfrekvens
+        self.pipe_length = 1.0             # 0.5-1.5, relativ pip-längd
+        self.pipe_q_factor = 2.5           # 1.5-4.0, Q-faktor (dämpning)
+        self.pipe_amplitude = 0.0
+        self.pipe_phase = 0.0
+
+        # Tändning & förbränning
+        self.burn_duration_factor = 1.0    # 0.7-1.4, förbränningstid
+        self.combustion_efficiency = 1.0   # 0.7-1.0, förbränningsverkningsgrad
+        self.spark_duration = 0.002        # 0.001-0.005, gnistlängd (sek)
+        self.ignition_advance_range = 18.0 # 10-30 grader, optimal avvikelse
+
+        # Bränsle & insug
+        self.fuel_evap_rate_cr = 1.0       # 0.5-2.0, vevhus-bränsle-förångning
+        self.fuel_evap_rate_cyl = 1.0      # 0.5-2.0, cylinder-bränsle-förångning
+        self.reed_stiffness = 1200.0       # 800-2000, vevhusventil-styvhet
+        self.idle_circuit_strength = 1.0   # 0.5-1.5, tomgångskrets-styrka
+
+        # Mekaniskt
+        self.inertia_multiplier = 1.0      # 0.6-1.5, tröghet (svänghjul)
+        self.friction_factor = 1.0         # 0.7-1.3, friktionsfaktor
+        self.mechanical_efficiency = 0.85  # 0.75-0.92, mekanisk verkningsgrad
         self.spark_active = False
         self.ignition_enabled = True
         self.fuel_cutoff = False
@@ -227,16 +263,21 @@ class EnginePhysics:
     def get_kinematics(self, theta: float) -> tuple[float, float, float, float]:
         s_theta = math.sin(theta)
         c_theta = math.cos(theta)
+        
+        # Använd trimnings-parametrar för vevmekanism
+        R_eff = self.R * self.stroke_multiplier
+        L_eff = self.rod_length
+        
         # Clamp argument to asin to prevent domain errors from floating-point drift
-        beta_arg = max(-1.0, min(1.0, self.R / self.L * s_theta))
+        beta_arg = max(-1.0, min(1.0, R_eff / L_eff * s_theta))
         beta = math.asin(beta_arg)
         c_beta = math.cos(beta)
         # Guard against division by zero when c_beta approaches zero
         c_beta = max(c_beta, 1e-6)
-        x = self.R + self.L - (self.R * c_theta + self.L * c_beta)
-        dx_dtheta = self.R * s_theta * (1 + self.R * c_theta / (self.L * c_beta))
+        x = R_eff + L_eff - (R_eff * c_theta + L_eff * c_beta)
+        dx_dtheta = R_eff * s_theta * (1 + R_eff * c_theta / (L_eff * c_beta))
         v_cyl = self.V_c + self.A_p * x
-        v_cr = self.V_cr_min + self.A_p * (2 * self.R - x)
+        v_cr = self.V_cr_min + self.A_p * (2 * R_eff - x)
         return x, v_cyl, v_cr, dx_dtheta
 
     def snapshot(self) -> EngineSnapshot:
@@ -248,8 +289,8 @@ class EnginePhysics:
         v_cr = max(v_cr, 1e-9)
         p_cyl = min(MAX_CYLINDER_PRESSURE, max(MIN_PRESSURE, self.m_cyl * R_GAS * self.T_cyl / v_cyl))
         p_cr = min(MAX_CRANKCASE_PRESSURE, max(MIN_CRANKCASE_PRESSURE, self.m_cr * R_GAS * self.T_cr / v_cr))
-        a_exh = max(0.0, x - self.x_exh) * self.w_exh
-        a_tr = max(0.0, x - self.x_tr) * self.w_tr
+        a_exh = max(0.0, x - self.exhaust_port_height) * self.exhaust_port_width
+        a_tr = max(0.0, x - self.transfer_port_height) * self.transfer_port_width
         _, _, _, a_main, a_idle = self.intake_conditions(p_cr)
         a_in = a_main + a_idle
         return EngineSnapshot(
@@ -290,11 +331,11 @@ class EnginePhysics:
         v_cr = max(v_cr, 1e-9)
         p_cyl = min(MAX_CYLINDER_PRESSURE, max(MIN_PRESSURE, self.m_cyl * R_GAS * self.T_cyl / v_cyl))
         p_cr = min(MAX_CRANKCASE_PRESSURE, max(MIN_CRANKCASE_PRESSURE, self.m_cr * R_GAS * self.T_cr / v_cr))
-        a_exh = max(0.0, x - self.x_exh) * self.w_exh
-        a_tr = max(0.0, x - self.x_tr) * self.w_tr
+        a_exh = max(0.0, x - self.exhaust_port_height) * self.exhaust_port_width
+        a_tr = max(0.0, x - self.transfer_port_height) * self.transfer_port_width
         throttle_factor, idle_circuit, p_intake, a_main, a_idle = self.intake_conditions(p_cr)
         pressure_diff = p_intake - p_cr
-        reed_force = pressure_diff * 0.02 - self.reed_opening * 1200.0 - self.reed_velocity * 40.0
+        reed_force = pressure_diff * 0.02 - self.reed_opening * self.reed_stiffness - self.reed_velocity * 40.0
         self.reed_velocity += reed_force * dt
         self.reed_opening += self.reed_velocity * dt
         if self.reed_opening < 0.0:
@@ -498,8 +539,10 @@ class EnginePhysics:
                     duration_deg *= 1.10
                 elif self.lambda_value > 1.10:
                     duration_deg *= 1.25
+                # Använd burn_duration_factor för att justera förbränningstid
+                duration_deg *= self.burn_duration_factor
                 self.burn_duration = math.radians(max(18.0, min(65.0, duration_deg)))
-                self.combustible_fuel_mass = available_fuel * min(1.0, 0.70 + 0.30 * self.combustion_efficiency)
+                self.combustible_fuel_mass = available_fuel * min(1.0, 0.70 + 0.30 * self.combustion_efficiency * self.combustion_efficiency)
         d_q_comb = 0.0
         if self.combustion_active:
             # Check if we still have fuel to burn
@@ -580,9 +623,11 @@ class EnginePhysics:
         pumping_drag = self.omega * 0.008 + 0.000008 * self.omega * self.omega + (1.0 - self.throttle) * 2.0
         # Extra braking when fuel is cut off - engine should stop quickly (but not when starter is active)
         extra_brake = 8.0 if self.fuel_cutoff and not starter_active else 0.0
-        net_torque = torque + starter_torque - self.friction - pumping_drag - extra_brake
-        # Guard against zero moment of inertia
-        I_engine = max(self.I_engine, 1e-6)
+        # Använd trimnings-faktorer för friktion
+        effective_friction = self.friction * self.friction_factor
+        net_torque = torque + starter_torque - effective_friction - pumping_drag - extra_brake
+        # Guard against zero moment of inertia, använd inertia_multiplier
+        I_engine = max(self.I_engine * self.inertia_multiplier, 1e-6)
         self.omega += (net_torque / I_engine) * dt
         if self.omega < 40.0:
             # Only apply idle assistance if engine should be running
@@ -605,8 +650,7 @@ class EnginePhysics:
             
             self.torque_ema = self.torque_ema * 0.80 + self.last_cycle_torque * 0.20
             # Power in kW = Torque (Nm) * Omega (rad/s) / 1000 * mechanical_efficiency
-            mechanical_efficiency = 0.85
-            power_kw = max(0.0, (self.torque_ema * self.omega) / 1000.0 * mechanical_efficiency)
+            power_kw = max(0.0, (self.torque_ema * self.omega) / 1000.0 * self.mechanical_efficiency)
             self.power_ema = self.power_ema * 0.80 + power_kw * 0.20
             
         self.last_theta_cross = self.theta
