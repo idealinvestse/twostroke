@@ -202,6 +202,44 @@ class EnginePhysics:
         
         # For debug
         self.last_d_q_comb = 0.0
+        
+        # === TRIMMING-PARAMETRAR ===
+        # Dessa kan justeras för att simulera olika trimningsalternativ
+        
+        # Motor-geometri
+        self.stroke_multiplier = 1.0  # 0.8-1.2, ändrar slagläge
+        self.bore_multiplier = 1.0    # 0.9-1.15, ändrar borr-diameter
+        self.compression_ratio = 7.5  # 6.0-10.0, kompressionsförhållande
+        self.rod_length = CON_ROD_M    # 0.08-0.12, plejlstångslängd
+        
+        # Scavenging & portar
+        self.transfer_port_height = TRANSFER_PORT_OPEN_M  # 0.025-0.045
+        self.exhaust_port_height = EXHAUST_PORT_OPEN_M    # 0.018-0.035
+        self.exhaust_port_width = EXHAUST_PORT_WIDTH_M    # 0.030-0.050
+        self.transfer_port_width = TRANSFER_PORT_WIDTH_M  # 0.025-0.045
+        self.port_overlap = 0.0       # -5 till +10 grader
+        
+        # Avgassystem (expansion chamber)
+        self.pipe_resonance_freq = PIPE_RESONANCE_FREQ_HZ  # 80-200 Hz
+        self.pipe_length = 1.0        # 0.5-1.5, relativ pip-längd
+        self.pipe_q_factor = 2.5      # 1.5-4.0, Q-faktor
+        
+        # Tändning & förbränning
+        self.burn_duration_factor = 1.0   # 0.7-1.4, förbränningstid
+        self.combustion_efficiency = 1.0  # 0.7-1.0, förbränningsverkningsgrad
+        self.spark_duration = 0.002       # 0.001-0.005, gnistlängd
+        self.ignition_advance_range = 18.0 # 10-30 grader
+        
+        # Bränsle & insug
+        self.fuel_evap_rate_cr = 1.0    # 0.5-2.0, vevhus-förångning
+        self.fuel_evap_rate_cyl = 1.0   # 0.5-2.0, cylinder-förångning
+        self.reed_stiffness = 1200.0    # 800-2000, vevhusventil-styvhet
+        self.idle_circuit_strength = 1.0 # 0.5-1.5
+        
+        # Mekaniskt
+        self.inertia_multiplier = 1.0   # 0.6-1.5, tröghet
+        self.friction_factor = 1.0      # 0.7-1.3, friktionsfaktor
+        self.mechanical_efficiency = 0.85  # 0.75-0.92
     
     @property
     def T_cyl(self) -> float:
