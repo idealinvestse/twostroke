@@ -35,6 +35,7 @@ from physics.constants import (
     TRANSFER_PORT_OPEN_M,
     EXHAUST_PORT_WIDTH_M,
     TRANSFER_PORT_WIDTH_M,
+    PIPE_RESONANCE_FREQ_HZ,
 )
 from physics.utils import clamp
 from physics.kinematics import SliderCrankKinematics
